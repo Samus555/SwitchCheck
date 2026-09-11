@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import Any
 from urllib.parse import urljoin
@@ -26,6 +27,10 @@ class NetBoxClient:
             timeout=15,
             verify=verify_tls,
         )
+        self._devices_by_name: dict[str, dict[str, Any]] = {}
+        self._device_groups: dict[int, list[dict[str, Any]]] = {}
+        self._interfaces_by_device: dict[int, list[dict[str, Any]]] = {}
+        self._vlans: list[dict[str, Any]] | None = None
 
     async def __aenter__(self) -> "NetBoxClient":
         return self
@@ -108,36 +113,72 @@ class NetBoxClient:
             raise NetBoxError("Could not send the update to NetBox.") from exc
 
     async def _find_device(self, device_name: str) -> dict[str, Any]:
+        cached = self._devices_by_name.get(device_name)
+        if cached is not None:
+            return cached
+
         devices = await self._get("dcim/devices/", {"name": device_name, "limit": 2})
         exact = [
             device for device in devices.get("results", []) if device.get("name") == device_name
         ]
         if not exact:
             raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
+        self._devices_by_name[device_name] = exact[0]
         return exact[0]
 
     async def _get_device_group(self, device: dict[str, Any]) -> list[dict[str, Any]]:
+        cached = self._device_groups.get(device["id"])
+        if cached is not None:
+            return cached
+
         virtual_chassis = device.get("virtual_chassis") or {}
         chassis_id = virtual_chassis.get("id")
         if chassis_id is None:
-            return [device]
+            members = [device]
+            self._device_groups[device["id"]] = members
+            return members
 
         members = await self._get_paginated(
             "dcim/devices/", {"virtual_chassis_id": chassis_id, "limit": 100}
         )
         members_by_id = {member["id"]: member for member in members}
         members_by_id.setdefault(device["id"], device)
-        return list(members_by_id.values())
+        members = list(members_by_id.values())
+        for member in members:
+            self._device_groups[member["id"]] = members
+        return members
 
     async def _get_interface_records(self, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        interfaces: list[dict[str, Any]] = []
-        for device in devices:
-            interfaces.extend(
-                await self._get_paginated(
-                    "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
+        missing_devices = [
+            device for device in devices if device["id"] not in self._interfaces_by_device
+        ]
+        if missing_devices:
+            fetched = await asyncio.gather(
+                *(
+                    self._get_paginated(
+                        "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
+                    )
+                    for device in missing_devices
                 )
             )
-        return interfaces
+            for device, interfaces in zip(missing_devices, fetched, strict=True):
+                self._interfaces_by_device[device["id"]] = interfaces
+        return [
+            interface
+            for device in devices
+            for interface in self._interfaces_by_device[device["id"]]
+        ]
+
+    async def _get_vlan_records(self) -> list[dict[str, Any]]:
+        if self._vlans is None:
+            self._vlans = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        return self._vlans
+
+    async def prepare_import(self, device_name: str) -> None:
+        """Preload shared NetBox data once before executing a batch."""
+        device = await self._find_device(device_name)
+        devices = await self._get_device_group(device)
+        await asyncio.gather(self._get_interface_records(devices), self._get_vlan_records())
 
     async def get_configuration(
         self, device_name: str, aruba_vlan_ids: set[int] | None = None
@@ -156,7 +197,7 @@ class NetBoxClient:
 
         site_id = (device.get("site") or {}).get("id")
         location_id = (device.get("location") or {}).get("id")
-        vlan_results = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        vlan_results = await self._get_vlan_records()
         applicable = [
             item
             for item in vlan_results
@@ -219,7 +260,7 @@ class NetBoxClient:
         if not create and target is None:
             raise NetBoxError(f'Interface "{source.name}" was not found in NetBox.')
 
-        vlan_results = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        vlan_results = await self._get_vlan_records()
         source_vids = set(source.tagged_vlans)
         if source.untagged_vlan is not None:
             source_vids.add(source.untagged_vlan)
@@ -280,7 +321,10 @@ class NetBoxClient:
                     "type": "lag" if normalized_name.startswith(("lag", "trk")) else "other",
                 }
             )
-            await self._write("POST", "dcim/interfaces/", payload)
+            created = await self._write("POST", "dcim/interfaces/", payload)
+            self._interfaces_by_device[target_device["id"]].append(
+                {"id": created.get("id"), "name": source.name}
+            )
             return f'Interface "{source.name}" was added to NetBox.'
 
         await self._write("PATCH", f"dcim/interfaces/{target['id']}/", payload)
@@ -302,7 +346,7 @@ class NetBoxClient:
         device = await self._find_device(device_name)
         site_id = (device.get("site") or {}).get("id")
         location_id = (device.get("location") or {}).get("id")
-        vlan_results = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        vlan_results = await self._get_vlan_records()
         candidates = [
             item
             for item in vlan_results
@@ -327,7 +371,8 @@ class NetBoxClient:
 
         if create:
             payload["vid"] = source.vid
-            await self._write("POST", "ipam/vlans/", payload)
+            created = await self._write("POST", "ipam/vlans/", payload)
+            vlan_results.append({"id": created.get("id"), **payload})
             return f"VLAN {source.vid} was added to NetBox."
 
         await self._write("PATCH", f"ipam/vlans/{target['id']}/", payload)

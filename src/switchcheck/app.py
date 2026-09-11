@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -99,12 +100,22 @@ async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBat
     async with NetBoxClient(
         str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
     ) as client:
-        for action in actions:
-            try:
-                message = await _execute_import(client, payload.device, action)
-                results.append(NetBoxImportResult(success=True, message=message))
-            except NetBoxError as exc:
-                results.append(NetBoxImportResult(success=False, message=str(exc)))
+        try:
+            await client.prepare_import(payload.device)
+        except NetBoxError as exc:
+            results = [NetBoxImportResult(success=False, message=str(exc)) for _action in actions]
+        else:
+            semaphore = asyncio.Semaphore(8)
+            for priority in sorted({_import_priority(action) for action in actions}):
+                group = [action for action in actions if _import_priority(action) == priority]
+                results.extend(
+                    await asyncio.gather(
+                        *(
+                            _execute_import_safely(client, payload.device, action, semaphore)
+                            for action in group
+                        )
+                    )
+                )
 
     applied = sum(result.success for result in results)
     return NetBoxBatchImportResult(
@@ -112,6 +123,20 @@ async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBat
         failed=len(results) - applied,
         results=results,
     )
+
+
+async def _execute_import_safely(
+    client: NetBoxClient,
+    device: str,
+    action: NetBoxImportAction,
+    semaphore: asyncio.Semaphore,
+) -> NetBoxImportResult:
+    async with semaphore:
+        try:
+            message = await _execute_import(client, device, action)
+            return NetBoxImportResult(success=True, message=message)
+        except NetBoxError as exc:
+            return NetBoxImportResult(success=False, message=str(exc))
 
 
 async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImportAction) -> str:
