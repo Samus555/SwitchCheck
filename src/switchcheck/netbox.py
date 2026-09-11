@@ -3,7 +3,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from switchcheck.models import Interface, InterfaceMode
+from switchcheck.models import ConfigurationData, Interface, InterfaceMode, Vlan
 
 
 class NetBoxError(RuntimeError):
@@ -47,23 +47,96 @@ class NetBoxClient:
         except (httpx.RequestError, ValueError) as exc:
             raise NetBoxError("Could not connect to NetBox or read its response.") from exc
 
-    async def get_interfaces(self, device_name: str) -> list[Interface]:
-        devices = await self._get("dcim/devices/", {"name": device_name, "limit": 2})
-        matches = devices.get("results", [])
-        exact = [device for device in matches if device.get("name") == device_name]
-        if not exact:
-            raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
+    async def _render_config(self, device_id: int) -> tuple[str | None, str | None]:
+        try:
+            response = await self.client.post(
+                urljoin(self.base_url, f"dcim/devices/{device_id}/render-config/"),
+                json={},
+            )
+            if response.status_code == 400:
+                return None, "NetBox has no configuration template assigned to this device."
+            if response.status_code in {401, 403}:
+                return None, "The API token does not have permission to render configurations."
+            if response.status_code == 404:
+                return None, "This NetBox version does not provide device configuration rendering."
+            response.raise_for_status()
+            data = response.json()
+            content = data.get("content") if isinstance(data, dict) else None
+            if not isinstance(content, str):
+                return None, "NetBox returned an invalid rendered configuration."
+            return content, None
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
+            return None, "NetBox could not render the device configuration."
 
-        device_id = exact[0]["id"]
-        data = await self._get("dcim/interfaces/", {"device_id": device_id, "limit": 100})
+    async def _get_paginated(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        data = await self._get(path, params)
         results = list(data.get("results", []))
         next_url = data.get("next")
         while next_url:
             data = await self._get(next_url)
             results.extend(data.get("results", []))
             next_url = data.get("next")
+        return results
 
-        return [self._to_interface(item) for item in results]
+    async def get_configuration(
+        self, device_name: str, aruba_vlan_ids: set[int] | None = None
+    ) -> ConfigurationData:
+        devices = await self._get("dcim/devices/", {"name": device_name, "limit": 2})
+        matches = devices.get("results", [])
+        exact = [device for device in matches if device.get("name") == device_name]
+        if not exact:
+            raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
+
+        device = exact[0]
+        rendered_config, rendered_config_error = await self._render_config(device["id"])
+        interface_results = await self._get_paginated(
+            "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
+        )
+        interfaces = [self._to_interface(item) for item in interface_results]
+
+        relevant_vids = set(aruba_vlan_ids or ())
+        for interface in interfaces:
+            if interface.untagged_vlan is not None:
+                relevant_vids.add(interface.untagged_vlan)
+            relevant_vids.update(interface.tagged_vlans)
+
+        site = device.get("site") or {}
+        site_id = site.get("id")
+        vlan_results: list[dict[str, Any]] = []
+        if site_id is not None:
+            vlan_results.extend(
+                await self._get_paginated("ipam/vlans/", {"site_id": site_id, "limit": 100})
+            )
+        if relevant_vids:
+            vlan_results.extend(
+                await self._get_paginated(
+                    "ipam/vlans/",
+                    {"vid": ",".join(str(vid) for vid in sorted(relevant_vids)), "limit": 100},
+                )
+            )
+
+        applicable = [item for item in vlan_results if self._vlan_applies_to_site(item, site_id)]
+        by_vid: dict[int, dict[str, Any]] = {}
+        for item in applicable:
+            vid = int(item["vid"])
+            current = by_vid.get(vid)
+            if current is None or self._scope_priority(item, site_id) > self._scope_priority(
+                current, site_id
+            ):
+                by_vid[vid] = item
+
+        return ConfigurationData(
+            interfaces=interfaces,
+            vlans=[self._to_vlan(item) for _, item in sorted(by_vid.items())],
+            rendered_config=rendered_config,
+            rendered_config_error=rendered_config_error,
+        )
+
+    async def get_interfaces(self, device_name: str) -> list[Interface]:
+        """Return interfaces for callers using the original client API."""
+        return (await self.get_configuration(device_name)).interfaces
 
     @staticmethod
     def _to_interface(item: dict[str, Any]) -> Interface:
@@ -84,3 +157,27 @@ class NetBoxClient:
             untagged_vlan=untagged.get("vid") if untagged else None,
             tagged_vlans=sorted(vlan["vid"] for vlan in tagged if "vid" in vlan),
         )
+
+    @staticmethod
+    def _to_vlan(item: dict[str, Any]) -> Vlan:
+        return Vlan(
+            vid=int(item["vid"]),
+            name=item.get("name") or "",
+            description=item.get("description") or "",
+        )
+
+    @staticmethod
+    def _vlan_applies_to_site(item: dict[str, Any], site_id: int | None) -> bool:
+        site = item.get("site")
+        scope = item.get("scope")
+        if site:
+            return site_id is not None and site.get("id") == site_id
+        if scope and item.get("scope_type") in {"dcim.site", "dcim | site"}:
+            return site_id is not None and scope.get("id") == site_id
+        return not scope
+
+    @staticmethod
+    def _scope_priority(item: dict[str, Any], site_id: int | None) -> int:
+        site = item.get("site") or {}
+        scope = item.get("scope") or {}
+        return int(site.get("id") == site_id or scope.get("id") == site_id)

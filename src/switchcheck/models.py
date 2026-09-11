@@ -18,6 +18,19 @@ class Interface(BaseModel):
     tagged_vlans: list[int] = Field(default_factory=list)
 
 
+class Vlan(BaseModel):
+    vid: int
+    name: str = ""
+    description: str = ""
+
+
+class ConfigurationData(BaseModel):
+    interfaces: list[Interface] = Field(default_factory=list)
+    vlans: list[Vlan] = Field(default_factory=list)
+    rendered_config: str | None = None
+    rendered_config_error: str | None = None
+
+
 class CompareStatus(StrEnum):
     MATCH = "match"
     DIFFERENT = "different"
@@ -39,6 +52,36 @@ class InterfaceComparison(BaseModel):
     differences: list[FieldDifference] = Field(default_factory=list)
 
 
+class VlanComparison(BaseModel):
+    vid: int
+    status: CompareStatus
+    aruba: Vlan | None = None
+    netbox: Vlan | None = None
+    differences: list[FieldDifference] = Field(default_factory=list)
+
+
+class ConfigDiffLine(BaseModel):
+    status: str
+    current_number: int | None = None
+    current_text: str | None = None
+    rendered_number: int | None = None
+    rendered_text: str | None = None
+
+
+class ConfigDiffSummary(BaseModel):
+    unchanged: int
+    changed: int
+    current_only: int
+    rendered_only: int
+
+
+class ConfigComparison(BaseModel):
+    available: bool = True
+    message: str | None = None
+    summary: ConfigDiffSummary
+    lines: list[ConfigDiffLine]
+
+
 class ComparisonSummary(BaseModel):
     total: int
     matches: int
@@ -50,6 +93,9 @@ class ComparisonSummary(BaseModel):
 class ComparisonResult(BaseModel):
     summary: ComparisonSummary
     interfaces: list[InterfaceComparison]
+    vlan_summary: ComparisonSummary
+    vlans: list[VlanComparison]
+    config: ConfigComparison
 
 
 class CompareRequest(BaseModel):

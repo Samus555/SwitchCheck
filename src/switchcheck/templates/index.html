@@ -143,6 +143,49 @@
             </div>
             <div id="empty-results" class="empty" hidden>No interfaces match this filter.</div>
           </div>
+
+          <div class="result-section-heading">
+            <div>
+              <span class="eyebrow">VLAN INVENTORY</span>
+              <h2>VLAN results</h2>
+              <p>Names and descriptions from the switch and the device’s NetBox site.</p>
+            </div>
+          </div>
+          <div id="vlan-summary" class="summary-grid"></div>
+          <div class="card results-card">
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr><th>VLAN ID</th><th>Status</th><th>Aruba</th><th>NetBox</th><th>Differences</th></tr>
+                </thead>
+                <tbody id="vlan-result-body"></tbody>
+              </table>
+            </div>
+            <div id="empty-vlans" class="empty" hidden>No VLANs were found in either source.</div>
+          </div>
+
+          <div class="result-section-heading config-diff-heading">
+            <div>
+              <span class="eyebrow">RENDERED CONFIGURATION</span>
+              <h2>Running config vs. NetBox render</h2>
+              <p>Line-by-line differences against the configuration template rendered by NetBox.</p>
+            </div>
+          </div>
+          <div id="config-diff-unavailable" class="alert neutral-alert" hidden></div>
+          <div id="config-diff-content">
+            <div id="config-summary" class="config-summary"></div>
+            <div class="card results-card diff-card">
+              <div class="diff-header">
+                <span>Current Aruba configuration</span>
+                <span>NetBox rendered configuration</span>
+              </div>
+              <div class="table-scroll">
+                <table class="config-diff-table">
+                  <tbody id="config-diff-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </section>
       </main>
 

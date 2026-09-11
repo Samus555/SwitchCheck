@@ -1,6 +1,13 @@
 import re
 
-from switchcheck.models import Interface, InterfaceMode
+from switchcheck.models import ConfigurationData, Interface, InterfaceMode, Vlan
+
+
+def _clean_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
 
 
 def _expand_number_list(value: str) -> list[int]:
@@ -39,14 +46,18 @@ def _expand_interfaces(value: str) -> list[str]:
     return result
 
 
-def parse_aruba_config(config: str) -> list[Interface]:
-    """Parse relevant interface state from ArubaOS-Switch and Aruba CX configs."""
+def parse_aruba_configuration(config: str) -> ConfigurationData:
+    """Parse interface and VLAN state from ArubaOS-Switch and Aruba CX configs."""
     interfaces: dict[str, Interface] = {}
+    vlans: dict[int, Vlan] = {}
     current_interfaces: list[str] = []
-    current_vlan: int | None = None
+    current_vlans: list[int] = []
 
     def get_interface(name: str) -> Interface:
         return interfaces.setdefault(name, Interface(name=name))
+
+    def get_vlan(vid: int) -> Vlan:
+        return vlans.setdefault(vid, Vlan(vid=vid))
 
     for raw_line in config.splitlines():
         line = raw_line.strip()
@@ -56,37 +67,57 @@ def parse_aruba_config(config: str) -> list[Interface]:
         interface_match = re.fullmatch(r"interface\s+(.+)", line, re.IGNORECASE)
         if interface_match:
             current_interfaces = _expand_interfaces(interface_match.group(1))
-            current_vlan = None
+            current_vlans = []
             for name in current_interfaces:
                 get_interface(name)
             continue
 
-        vlan_match = re.fullmatch(r"vlan\s+(\d+)", line, re.IGNORECASE)
+        vlan_match = re.fullmatch(
+            r"vlan\s+([\d,\s-]+?)(?:\s+name\s+(.+))?",
+            line,
+            re.IGNORECASE,
+        )
         if vlan_match:
-            current_vlan = int(vlan_match.group(1))
+            current_vlans = _expand_number_list(vlan_match.group(1))
             current_interfaces = []
+            for vid in current_vlans:
+                vlan = get_vlan(vid)
+                if vlan_match.group(2):
+                    vlan.name = _clean_value(vlan_match.group(2))
             continue
 
-        if current_vlan is not None:
+        if current_vlans:
             membership = re.fullmatch(r"(tagged|untagged)\s+(.+)", line, re.IGNORECASE)
             if membership:
                 tagged = membership.group(1).lower() == "tagged"
                 for name in _expand_interfaces(membership.group(2)):
                     interface = get_interface(name)
-                    if tagged:
-                        interface.tagged_vlans = sorted({*interface.tagged_vlans, current_vlan})
+                    for vid in current_vlans:
+                        if tagged:
+                            interface.tagged_vlans = sorted({*interface.tagged_vlans, vid})
+                        else:
+                            interface.untagged_vlan = vid
+                continue
+            vlan_name = re.fullmatch(r"name\s+(.+)", line, re.IGNORECASE)
+            vlan_description = re.fullmatch(r"description\s+(.+)", line, re.IGNORECASE)
+            if vlan_name or vlan_description:
+                for vid in current_vlans:
+                    vlan = get_vlan(vid)
+                    if vlan_name:
+                        vlan.name = _clean_value(vlan_name.group(1))
                     else:
-                        interface.untagged_vlan = current_vlan
+                        assert vlan_description is not None
+                        vlan.description = _clean_value(vlan_description.group(1))
                 continue
 
         if not current_interfaces:
             continue
 
         lowered = line.lower()
-        description = re.fullmatch(r"(?:description|name)\s+[\"']?(.+?)[\"']?", line, re.IGNORECASE)
+        description = re.fullmatch(r"(?:description|name)\s+(.+)", line, re.IGNORECASE)
         if description:
             for name in current_interfaces:
-                get_interface(name).description = description.group(1)
+                get_interface(name).description = _clean_value(description.group(1))
         elif lowered in {"shutdown", "disable"}:
             for name in current_interfaces:
                 get_interface(name).enabled = False
@@ -99,10 +130,13 @@ def parse_aruba_config(config: str) -> list[Interface]:
             allowed = re.fullmatch(r"vlan\s+trunk\s+allowed\s+(.+)", line, re.IGNORECASE)
             if access or native:
                 vlan_id = int((access or native).group(1))
+                get_vlan(vlan_id)
                 for name in current_interfaces:
                     get_interface(name).untagged_vlan = vlan_id
             elif allowed:
                 vlan_ids = _expand_number_list(allowed.group(1))
+                for vlan_id in vlan_ids:
+                    get_vlan(vlan_id)
                 for name in current_interfaces:
                     get_interface(name).tagged_vlans = vlan_ids
 
@@ -112,7 +146,15 @@ def parse_aruba_config(config: str) -> list[Interface]:
         elif interface.untagged_vlan is not None:
             interface.mode = InterfaceMode.ACCESS
 
-    return sorted(interfaces.values(), key=lambda item: _natural_key(item.name))
+    return ConfigurationData(
+        interfaces=sorted(interfaces.values(), key=lambda item: _natural_key(item.name)),
+        vlans=sorted(vlans.values(), key=lambda item: item.vid),
+    )
+
+
+def parse_aruba_config(config: str) -> list[Interface]:
+    """Return parsed interfaces for callers using the original parser API."""
+    return parse_aruba_configuration(config).interfaces
 
 
 def _natural_key(value: str) -> list[tuple[int, int | str]]:

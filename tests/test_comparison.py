@@ -1,5 +1,5 @@
-from switchcheck.comparison import compare_interfaces
-from switchcheck.models import CompareStatus, Interface, InterfaceMode
+from switchcheck.comparison import compare_configs, compare_interfaces
+from switchcheck.models import CompareStatus, Interface, InterfaceMode, Vlan
 
 
 def test_compares_interfaces_and_summarizes_drift() -> None:
@@ -30,3 +30,58 @@ def test_compares_interfaces_and_summarizes_drift() -> None:
         CompareStatus.ONLY_NETBOX,
     ]
     assert result.interfaces[1].differences[0].field == "enabled"
+
+
+def test_normalizes_interface_names_and_compares_vlan_membership() -> None:
+    aruba = [
+        Interface(
+            name="1/1/1",
+            mode=InterfaceMode.TAGGED,
+            untagged_vlan=10,
+            tagged_vlans=[20, 30],
+        )
+    ]
+    netbox = [
+        Interface(
+            name="1 / 1 / 1",
+            mode=InterfaceMode.TAGGED,
+            untagged_vlan=10,
+            tagged_vlans=[20, 40],
+        )
+    ]
+
+    result = compare_interfaces(aruba, netbox)
+
+    assert result.summary.total == 1
+    assert result.interfaces[0].status is CompareStatus.DIFFERENT
+    assert [difference.field for difference in result.interfaces[0].differences] == ["tagged vlans"]
+
+
+def test_compares_vlan_metadata() -> None:
+    result = compare_interfaces(
+        [],
+        [],
+        [Vlan(vid=10, name="Users", description="Access"), Vlan(vid=20, name="Voice")],
+        [Vlan(vid=10, name="Users", description="Clients"), Vlan(vid=30, name="Servers")],
+    )
+
+    assert result.vlan_summary.model_dump() == {
+        "total": 3,
+        "matches": 0,
+        "differences": 1,
+        "only_aruba": 1,
+        "only_netbox": 1,
+    }
+    assert result.vlans[0].differences[0].field == "description"
+
+
+def test_builds_side_by_side_configuration_diff() -> None:
+    result = compare_configs(
+        "hostname access-01\nvlan 10\n name Users",
+        "hostname access-01\nvlan 10\n name Clients\nvlan 20",
+    )
+
+    assert result.available is True
+    assert result.summary.unchanged == 2
+    assert result.summary.changed == 1
+    assert result.summary.rendered_only == 1

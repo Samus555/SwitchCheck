@@ -6,6 +6,8 @@ const lineCount = document.querySelector("#line-count");
 const errorBox = document.querySelector("#error");
 const resultsSection = document.querySelector("#results");
 const resultBody = document.querySelector("#result-body");
+const vlanResultBody = document.querySelector("#vlan-result-body");
+const configDiffBody = document.querySelector("#config-diff-body");
 const emptyResults = document.querySelector("#empty-results");
 const submitButton = document.querySelector("#submit-button");
 const resultSearch = document.querySelector("#result-search");
@@ -67,7 +69,10 @@ form.addEventListener("submit", async (event) => {
     });
     resultSearch.value = "";
     renderSummary(data.summary);
+    renderSummary(data.vlan_summary, "#vlan-summary");
     renderResults();
+    renderVlans();
+    renderConfigDiff();
     resultsSection.hidden = false;
     resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
@@ -87,7 +92,7 @@ function showError(message) {
   errorBox.hidden = !message;
 }
 
-function renderSummary(summary) {
+function renderSummary(summary, selector = "#summary") {
   const items = [
     ["Total", summary.total, ""],
     ["Matches", summary.matches, "match"],
@@ -95,7 +100,7 @@ function renderSummary(summary) {
     ["Only Aruba", summary.only_aruba, "missing"],
     ["Only NetBox", summary.only_netbox, "missing"],
   ];
-  const container = document.querySelector("#summary");
+  const container = document.querySelector(selector);
   container.replaceChildren(
     ...items.map(([label, value, className]) => {
       const card = element("div", `summary-card ${className}`);
@@ -103,6 +108,72 @@ function renderSummary(summary) {
       return card;
     }),
   );
+}
+
+function renderVlans() {
+  const rows = comparisonData.vlans.map((item) => {
+    const row = document.createElement("tr");
+    const aruba = item.aruba;
+    const netbox = item.netbox;
+    const differences = item.differences.map((difference) => difference.field).join(", ");
+    row.append(
+      cell(String(item.vid), "interface-name"),
+      statusCell(item.status),
+      cell(formatVlan(aruba)),
+      cell(formatVlan(netbox)),
+      cell(differences || (item.status === "match" ? "No drift detected" : "VLAN not present")),
+    );
+    return row;
+  });
+  vlanResultBody.replaceChildren(...rows);
+  document.querySelector("#empty-vlans").hidden = rows.length !== 0;
+}
+
+function formatVlan(vlan) {
+  if (!vlan) return "—";
+  const name = vlan.name || "Unnamed";
+  return vlan.description ? `${name} — ${vlan.description}` : name;
+}
+
+function renderConfigDiff() {
+  const comparison = comparisonData.config;
+  const unavailable = document.querySelector("#config-diff-unavailable");
+  const content = document.querySelector("#config-diff-content");
+  if (!comparison.available) {
+    unavailable.textContent = comparison.message;
+    unavailable.hidden = false;
+    content.hidden = true;
+    return;
+  }
+
+  unavailable.hidden = true;
+  content.hidden = false;
+  const summary = comparison.summary;
+  const summaryItems = [
+    ["Unchanged", summary.unchanged, "match"],
+    ["Changed", summary.changed, "different"],
+    ["Current only", summary.current_only, "removed"],
+    ["Rendered only", summary.rendered_only, "added"],
+  ];
+  document.querySelector("#config-summary").replaceChildren(
+    ...summaryItems.map(([label, value, className]) => {
+      const item = element("span", `config-stat ${className}`);
+      item.append(element("strong", "", String(value)), document.createTextNode(` ${label}`));
+      return item;
+    }),
+  );
+
+  const rows = comparison.lines.map((line) => {
+    const row = element("tr", `diff-line ${line.status}`);
+    row.append(
+      cell(line.current_number ? String(line.current_number) : "", "line-number"),
+      cell(line.current_text ?? "", "line-code current-code"),
+      cell(line.rendered_number ? String(line.rendered_number) : "", "line-number"),
+      cell(line.rendered_text ?? "", "line-code rendered-code"),
+    );
+    return row;
+  });
+  configDiffBody.replaceChildren(...rows);
 }
 
 function renderResults() {
