@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Compare Aruba switch configurations with NetBox." />
+    <title>SwitchCheck</title>
+    <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml" />
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="SwitchCheck home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3m3 3-3 3M17 17H6l3 3m-3-3 3-3" /></svg>
+          </span>
+          <span>SwitchCheck</span>
+        </a>
+        <span class="stateless"><span class="status-dot"></span> Stateless</span>
+      </header>
+
+      <main>
+        <section class="hero">
+          <span class="eyebrow">CONFIGURATION AUDIT</span>
+          <h1>Switch intent, verified.</h1>
+          <p>Compare a running Aruba configuration against the source of truth in NetBox.</p>
+        </section>
+
+        <form id="compare-form">
+          <div class="workspace-grid">
+            <section class="card config-card">
+              <div class="card-header">
+                <div>
+                  <span class="step">01</span>
+                  <h2>Aruba configuration</h2>
+                  <p>Paste a running config or load it from a local file.</p>
+                </div>
+                <label class="button button-secondary file-button">
+                  <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4L8 7M5 14v5h14v-5" /></svg>
+                  Choose file
+                  <input id="config-file" type="file" accept=".txt,.cfg,.conf,text/plain" />
+                </label>
+              </div>
+              <div class="editor-wrap">
+                <div class="editor-label">
+                  <span id="file-name">running-config.txt</span>
+                  <span id="line-count">0 lines</span>
+                </div>
+                <textarea
+                  id="config"
+                  required
+                  spellcheck="false"
+                  placeholder="interface 1/1/1&#10;    description Uplink to core&#10;    vlan trunk native 10&#10;    vlan trunk allowed 20,30&#10;    no shutdown"
+                ></textarea>
+              </div>
+            </section>
+
+            <section class="card connection-card">
+              <div class="card-header">
+                <div>
+                  <span class="step">02</span>
+                  <h2>NetBox connection</h2>
+                  <p>Credentials are used once and never stored.</p>
+                </div>
+              </div>
+              <div class="fields">
+                <label>
+                  <span>NetBox URL</span>
+                  <div class="input-with-icon">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></svg>
+                    <input id="netbox-url" type="url" required placeholder="https://netbox.example.com" />
+                  </div>
+                </label>
+                <label>
+                  <span>API token</span>
+                  <div class="input-with-icon">
+                    <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" /><path d="m11 12 8-8m-3 3 2 2m-5 1 2 2" /></svg>
+                    <input id="token" type="password" required autocomplete="off" placeholder="••••••••••••••••" />
+                    <button id="toggle-token" class="icon-button" type="button" aria-label="Show token">
+                      <svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" /></svg>
+                    </button>
+                  </div>
+                </label>
+                <label>
+                  <span>Device name</span>
+                  <div class="input-with-icon">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h.01M7 15h.01M11 9h6M11 15h6" /></svg>
+                    <input id="device" required placeholder="access-sw-01" />
+                  </div>
+                </label>
+                <label class="switch-row">
+                  <span>
+                    <strong>Verify TLS certificate</strong>
+                    <small>Recommended for secure connections</small>
+                  </span>
+                  <input id="verify-tls" type="checkbox" checked role="switch" />
+                </label>
+              </div>
+              <button id="submit-button" class="button button-primary" type="submit">
+                <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
+                <span>Run comparison</span>
+              </button>
+              <p class="privacy-note">
+                <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
+                Data stays in memory for the duration of this request.
+              </p>
+            </section>
+          </div>
+        </form>
+
+        <div id="error" class="alert" role="alert" hidden></div>
+
+        <section id="results" class="results" hidden>
+          <div class="results-heading">
+            <div>
+              <span class="eyebrow">COMPARISON COMPLETE</span>
+              <h2>Interface results</h2>
+            </div>
+            <button id="new-comparison" class="button button-secondary" type="button">New comparison</button>
+          </div>
+          <div id="summary" class="summary-grid"></div>
+          <div class="card results-card">
+            <div class="table-toolbar">
+              <div class="filters" id="filters">
+                <button class="filter active" data-filter="all">All</button>
+                <button class="filter" data-filter="different">Differences</button>
+                <button class="filter" data-filter="match">Matches</button>
+                <button class="filter" data-filter="missing">Missing</button>
+              </div>
+              <div class="search-wrap">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+                <input id="result-search" type="search" placeholder="Filter interfaces…" />
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr><th>Interface</th><th>Status</th><th>Differences</th><th></th></tr>
+                </thead>
+                <tbody id="result-body"></tbody>
+              </table>
+            </div>
+            <div id="empty-results" class="empty" hidden>No interfaces match this filter.</div>
+          </div>
+        </section>
+      </main>
+
+      <footer>SwitchCheck <span>•</span> No database. No authentication. No retained data.</footer>
+    </div>
+    <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  </body>
+</html>
