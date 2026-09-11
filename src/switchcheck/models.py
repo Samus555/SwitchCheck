@@ -16,6 +16,7 @@ class Interface(BaseModel):
     mode: InterfaceMode = InterfaceMode.OTHER
     untagged_vlan: int | None = None
     tagged_vlans: list[int] = Field(default_factory=list)
+    lag: str | None = None
 
 
 class Vlan(BaseModel):
@@ -104,3 +105,42 @@ class CompareRequest(BaseModel):
     token: str = Field(min_length=1)
     device: str = Field(min_length=1)
     verify_tls: bool = True
+
+
+class ImportResource(StrEnum):
+    INTERFACE = "interface"
+    VLAN = "vlan"
+
+
+class NetBoxImportAction(BaseModel):
+    resource: ImportResource
+    create: bool = False
+    fields: list[str] = Field(default_factory=list)
+    interface: Interface | None = None
+    vlan: Vlan | None = None
+
+
+class NetBoxImportRequest(NetBoxImportAction):
+    netbox_url: HttpUrl
+    token: str = Field(min_length=1)
+    device: str = Field(min_length=1)
+    verify_tls: bool = True
+
+
+class NetBoxBatchImportRequest(BaseModel):
+    netbox_url: HttpUrl
+    token: str = Field(min_length=1)
+    device: str = Field(min_length=1)
+    verify_tls: bool = True
+    actions: list[NetBoxImportAction] = Field(min_length=1, max_length=100)
+
+
+class NetBoxImportResult(BaseModel):
+    success: bool
+    message: str
+
+
+class NetBoxBatchImportResult(BaseModel):
+    applied: int
+    failed: int
+    results: list[NetBoxImportResult]

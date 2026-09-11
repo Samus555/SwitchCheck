@@ -4,6 +4,7 @@ const fileInput = document.querySelector("#config-file");
 const fileName = document.querySelector("#file-name");
 const lineCount = document.querySelector("#line-count");
 const errorBox = document.querySelector("#error");
+const actionMessage = document.querySelector("#action-message");
 const resultsSection = document.querySelector("#results");
 const resultBody = document.querySelector("#result-body");
 const vlanResultBody = document.querySelector("#vlan-result-body");
@@ -11,9 +12,12 @@ const configDiffBody = document.querySelector("#config-diff-body");
 const emptyResults = document.querySelector("#empty-results");
 const submitButton = document.querySelector("#submit-button");
 const resultSearch = document.querySelector("#result-search");
+const applySelectedButton = document.querySelector("#apply-selected");
+const clearSelectionButton = document.querySelector("#clear-selection");
 
 let comparisonData = null;
 let activeFilter = "all";
+const selectedChanges = new Map();
 
 function updateLineCount() {
   const count = configInput.value ? configInput.value.split("\n").length : 0;
@@ -63,6 +67,8 @@ form.addEventListener("submit", async (event) => {
       throw new Error(detail || "The comparison could not be completed.");
     }
     comparisonData = data;
+    selectedChanges.clear();
+    updateSelectionToolbar();
     activeFilter = "all";
     document.querySelectorAll(".filter").forEach((button) => {
       button.classList.toggle("active", button.dataset.filter === "all");
@@ -92,6 +98,127 @@ function showError(message) {
   errorBox.hidden = !message;
 }
 
+function actionButton(label, resource, source, fields, create = false) {
+  const button = element("button", "button button-secondary action-button", label);
+  button.type = "button";
+  button.addEventListener("click", () => importToNetBox(button, resource, source, fields, create));
+  return button;
+}
+
+function selectionControl(resource, source, fields, create = false) {
+  const identifier = resource === "interface" ? source.name : source.vid;
+  const key = `${resource}:${create}:${identifier}:${[...fields].sort().join(",")}`;
+  const label = element("label", "selection-control");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = selectedChanges.has(key);
+  checkbox.setAttribute(
+    "aria-label",
+    create ? `Select adding ${resource} ${identifier}` : `Select importing ${fields.join(", ")}`,
+  );
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) {
+      selectedChanges.set(key, {
+        resource,
+        create,
+        fields,
+        [resource]: source,
+      });
+    } else {
+      selectedChanges.delete(key);
+    }
+    updateSelectionToolbar();
+  });
+  label.append(checkbox, element("span", "", "Select"));
+  return label;
+}
+
+function updateSelectionToolbar() {
+  const count = selectedChanges.size;
+  document.querySelector("#selected-count").textContent = String(count);
+  applySelectedButton.disabled = count === 0;
+  clearSelectionButton.disabled = count === 0;
+}
+
+async function importToNetBox(button, resource, source, fields, create) {
+  const operation = create ? `add this ${resource}` : `import ${fields.join(", ")}`;
+  if (!window.confirm(`Use the Aruba values to ${operation} in NetBox?`)) return;
+
+  button.disabled = true;
+  actionMessage.hidden = true;
+  const payload = {
+    netbox_url: document.querySelector("#netbox-url").value,
+    token: document.querySelector("#token").value,
+    device: document.querySelector("#device").value,
+    verify_tls: document.querySelector("#verify-tls").checked,
+    resource,
+    create,
+    fields,
+    [resource]: source,
+  };
+
+  try {
+    const response = await fetch("/api/netbox/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "The NetBox update failed.");
+    actionMessage.textContent = data.message;
+    actionMessage.classList.remove("action-error");
+    actionMessage.hidden = false;
+    form.requestSubmit();
+  } catch (error) {
+    actionMessage.textContent = error.message || "The NetBox update failed.";
+    actionMessage.classList.add("action-error");
+    actionMessage.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function applySelectedChanges() {
+  const actions = [...selectedChanges.values()];
+  if (!actions.length) return;
+  if (!window.confirm(`Apply ${actions.length} selected changes to NetBox?`)) return;
+
+  applySelectedButton.disabled = true;
+  applySelectedButton.textContent = "Applying…";
+  actionMessage.hidden = true;
+  try {
+    const response = await fetch("/api/netbox/import-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        netbox_url: document.querySelector("#netbox-url").value,
+        token: document.querySelector("#token").value,
+        device: document.querySelector("#device").value,
+        verify_tls: document.querySelector("#verify-tls").checked,
+        actions,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "The NetBox batch update failed.");
+    const failures = data.results.filter((result) => !result.success);
+    actionMessage.textContent = failures.length
+      ? `${data.applied} applied, ${data.failed} failed: ${failures.map((item) => item.message).join("; ")}`
+      : `${data.applied} selected changes were applied to NetBox.`;
+    actionMessage.classList.toggle("action-error", failures.length > 0);
+    actionMessage.hidden = false;
+    selectedChanges.clear();
+    updateSelectionToolbar();
+    form.requestSubmit();
+  } catch (error) {
+    actionMessage.textContent = error.message || "The NetBox batch update failed.";
+    actionMessage.classList.add("action-error");
+    actionMessage.hidden = false;
+  } finally {
+    applySelectedButton.textContent = "Apply selected";
+    updateSelectionToolbar();
+  }
+}
+
 function renderSummary(summary, selector = "#summary") {
   const items = [
     ["Total", summary.total, ""],
@@ -111,28 +238,72 @@ function renderSummary(summary, selector = "#summary") {
 }
 
 function renderVlans() {
-  const rows = comparisonData.vlans.map((item) => {
+  const rows = [];
+  comparisonData.vlans.forEach((item) => {
     const row = document.createElement("tr");
     const aruba = item.aruba;
     const netbox = item.netbox;
-    const differences = item.differences.map((difference) => difference.field).join(", ");
+    const actions = document.createElement("td");
+    const detailRow = vlanDetailRowFor(item);
+    if (item.status === "only_aruba") {
+      actions.append(selectionControl("vlan", aruba, [], true));
+      actions.append(actionButton("Add to NetBox", "vlan", aruba, [], true));
+    }
+    const detailButton = element("button", "details-button", "Details");
+    detailButton.type = "button";
+    detailButton.addEventListener("click", () => {
+      const opening = detailRow.hidden;
+      detailRow.hidden = !opening;
+      detailButton.textContent = opening ? "Hide" : "Details";
+    });
+    actions.append(detailButton);
     row.append(
       cell(String(item.vid), "interface-name"),
       statusCell(item.status),
       cell(formatVlan(aruba)),
       cell(formatVlan(netbox)),
-      cell(differences || (item.status === "match" ? "No drift detected" : "VLAN not present")),
+      differenceCell(item, "VLAN not present"),
+      actions,
     );
-    return row;
+    rows.push(row, detailRow);
   });
   vlanResultBody.replaceChildren(...rows);
-  document.querySelector("#empty-vlans").hidden = rows.length !== 0;
+  document.querySelector("#empty-vlans").hidden = comparisonData.vlans.length !== 0;
 }
 
 function formatVlan(vlan) {
   if (!vlan) return "—";
   const name = vlan.name || "Unnamed";
   return vlan.description ? `${name} — ${vlan.description}` : name;
+}
+
+function vlanDetailRowFor(item) {
+  const row = element("tr", "detail-row");
+  row.hidden = true;
+  const td = document.createElement("td");
+  td.colSpan = 6;
+  const panel = element("div", "detail-panel");
+  ["name", "description"].forEach((field) => {
+    const detail = element("div", "detail-item");
+    detail.append(
+      element("span", "", field),
+      element("code", "", `Aruba: ${formatValue(item.aruba?.[field])}`),
+      element("code", "", `NetBox: ${formatValue(item.netbox?.[field])}`),
+    );
+    const isDifferent = item.differences.some((difference) => difference.field === field);
+    if (isDifferent && item.aruba && item.netbox) {
+      const actions = element("div", "field-actions");
+      actions.append(
+        selectionControl("vlan", item.aruba, [field]),
+        actionButton("Import", "vlan", item.aruba, [field]),
+      );
+      detail.append(actions);
+    }
+    panel.append(detail);
+  });
+  td.append(panel);
+  row.append(td);
+  return row;
 }
 
 function renderConfigDiff() {
@@ -199,14 +370,18 @@ function renderResults() {
 
     const actionCell = document.createElement("td");
     const detailRow = detailRowFor(item);
-    const button = element("button", "details-button", "Details");
-    button.type = "button";
-    button.addEventListener("click", () => {
+    const detailButton = element("button", "details-button", "Details");
+    detailButton.type = "button";
+    detailButton.addEventListener("click", () => {
       const opening = detailRow.hidden;
       detailRow.hidden = !opening;
-      button.textContent = opening ? "Hide" : "Details";
+      detailButton.textContent = opening ? "Hide" : "Details";
     });
-    actionCell.append(button);
+    if (item.status === "only_aruba") {
+      actionCell.append(selectionControl("interface", item.aruba, [], true));
+      actionCell.append(actionButton("Add to NetBox", "interface", item.aruba, [], true));
+    }
+    actionCell.append(detailButton);
     row.append(actionCell);
     rows.push(row, detailRow);
   }
@@ -227,17 +402,15 @@ function statusCell(status) {
   return td;
 }
 
-function differenceCell(item) {
+function differenceCell(item, missingLabel = "Interface not present") {
   const td = document.createElement("td");
   const list = element("div", "diff-list");
   if (item.differences.length) {
     item.differences.forEach((difference) => {
       list.append(element("span", "diff-chip", difference.field));
     });
-  } else if (item.status === "match") {
-    list.append(element("span", "", "No drift detected"));
-  } else {
-    list.append(element("span", "", "Interface not present"));
+  } else if (item.status !== "match") {
+    list.append(element("span", "", missingLabel));
   }
   td.append(list);
   return td;
@@ -249,7 +422,7 @@ function detailRowFor(item) {
   const td = document.createElement("td");
   td.colSpan = 4;
   const panel = element("div", "detail-panel");
-  const fields = ["enabled", "description", "mode", "untagged_vlan", "tagged_vlans"];
+  const fields = ["enabled", "description", "mode", "untagged_vlan", "tagged_vlans", "lag"];
   fields.forEach((field) => {
     const detail = element("div", "detail-item");
     detail.append(
@@ -257,6 +430,17 @@ function detailRowFor(item) {
       element("code", "", `Aruba: ${formatValue(item.aruba?.[field])}`),
       element("code", "", `NetBox: ${formatValue(item.netbox?.[field])}`),
     );
+    const isDifferent = item.differences.some(
+      (difference) => difference.field.replaceAll(" ", "_") === field,
+    );
+    if (isDifferent && item.aruba && item.netbox) {
+      const actions = element("div", "field-actions");
+      actions.append(
+        selectionControl("interface", item.aruba, [field]),
+        actionButton("Import", "interface", item.aruba, [field]),
+      );
+      detail.append(actions);
+    }
     panel.append(detail);
   });
   td.append(panel);
@@ -294,6 +478,14 @@ document.querySelector("#filters").addEventListener("click", (event) => {
 });
 
 resultSearch.addEventListener("input", renderResults);
+applySelectedButton.addEventListener("click", applySelectedChanges);
+clearSelectionButton.addEventListener("click", () => {
+  selectedChanges.clear();
+  document.querySelectorAll(".selection-control input").forEach((checkbox) => {
+    checkbox.checked = false;
+  });
+  updateSelectionToolbar();
+});
 document.querySelector("#new-comparison").addEventListener("click", () => {
   resultsSection.hidden = true;
   window.scrollTo({ top: 0, behavior: "smooth" });

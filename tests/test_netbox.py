@@ -2,6 +2,7 @@ import httpx
 import pytest
 import respx
 
+from switchcheck.models import Interface, Vlan
 from switchcheck.netbox import NetBoxClient, NetBoxError
 
 
@@ -81,3 +82,60 @@ async def test_exposes_safe_netbox_validation_details() -> None:
     async with NetBoxClient("https://netbox.example", "secret") as client:
         with pytest.raises(NetBoxError, match="vid: Enter a valid number"):
             await client._get("test/")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_imports_selected_interface_field() -> None:
+    respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    respx.get("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"next": None, "results": [{"id": 8, "name": "1 / 1 / 1"}]},
+        )
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+    patch_route = respx.patch("https://netbox.example/api/dcim/interfaces/8/").mock(
+        return_value=httpx.Response(200, json={"id": 8})
+    )
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        message = await client.import_interface(
+            "access-01",
+            Interface(name="1/1/1", description="Imported description"),
+            ["description"],
+        )
+
+    assert message == 'Interface "1/1/1" was updated in NetBox.'
+    assert patch_route.calls[0].request.content == b'{"description":"Imported description"}'
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_adds_missing_vlan() -> None:
+    respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+    post_route = respx.post("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(201, json={"id": 10})
+    )
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        message = await client.import_vlan(
+            "access-01",
+            Vlan(vid=10, name="Users", description="Employee access"),
+            [],
+            create=True,
+        )
+
+    assert message == "VLAN 10 was added to NetBox."
+    assert post_route.calls[0].request.content == (
+        b'{"name":"Users","description":"Employee access","vid":10}'
+    )

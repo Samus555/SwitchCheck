@@ -12,8 +12,18 @@ def _clean_value(value: str) -> str:
 
 def _expand_number_list(value: str) -> list[int]:
     values: set[int] = set()
-    for part in re.split(r",\s*", value.strip()):
-        if not part:
+    parts = re.split(r"[\s,]+", value.strip())
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if (
+            part.isdigit()
+            and index + 2 < len(parts)
+            and parts[index + 1].lower() == "to"
+            and parts[index + 2].isdigit()
+        ):
+            values.update(range(int(part), int(parts[index + 2]) + 1))
+            index += 3
             continue
         if "-" in part:
             start, end = part.split("-", 1)
@@ -21,6 +31,7 @@ def _expand_number_list(value: str) -> list[int]:
                 values.update(range(int(start), int(end) + 1))
         elif part.isdigit():
             values.add(int(part))
+        index += 1
     return sorted(values)
 
 
@@ -62,6 +73,21 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
     for raw_line in config.splitlines():
         line = raw_line.strip()
         if not line or line.startswith(("!", "#", ";")):
+            continue
+
+        trunk_match = re.fullmatch(
+            r"trunk\s+(\S+)\s+(\S+)(?:\s+(?:trunk|lacp))?",
+            line,
+            re.IGNORECASE,
+        )
+        if trunk_match:
+            member_names = _expand_interfaces(trunk_match.group(1))
+            lag_name = trunk_match.group(2)
+            get_interface(lag_name)
+            for name in member_names:
+                get_interface(name).lag = lag_name
+            current_interfaces = []
+            current_vlans = []
             continue
 
         interface_match = re.fullmatch(r"interface\s+(.+)", line, re.IGNORECASE)
@@ -121,18 +147,96 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
         elif lowered in {"shutdown", "disable"}:
             for name in current_interfaces:
                 get_interface(name).enabled = False
-        elif lowered in {"no shutdown", "enable"}:
+        elif lowered in {"no shutdown", "undo shutdown", "enable"}:
             for name in current_interfaces:
                 get_interface(name).enabled = True
         else:
+            lag = re.fullmatch(r"lag\s+(\S+)(?:\s+mode\s+\S+)?", line, re.IGNORECASE)
+            comware_lag = re.fullmatch(
+                r"port\s+link-aggregation\s+group\s+(\d+)",
+                line,
+                re.IGNORECASE,
+            )
+            link_type = re.fullmatch(
+                r"port\s+link-type\s+(access|trunk|hybrid)",
+                line,
+                re.IGNORECASE,
+            )
+            comware_access = re.fullmatch(r"port\s+access\s+vlan\s+(\d+)", line, re.IGNORECASE)
+            comware_native = re.fullmatch(
+                r"port\s+(?:trunk|hybrid)\s+pvid\s+vlan\s+(\d+)",
+                line,
+                re.IGNORECASE,
+            )
+            comware_trunk = re.fullmatch(
+                r"port\s+trunk\s+permit\s+vlan\s+(.+)",
+                line,
+                re.IGNORECASE,
+            )
+            comware_hybrid = re.fullmatch(
+                r"port\s+hybrid\s+vlan\s+(.+)\s+(tagged|untagged)",
+                line,
+                re.IGNORECASE,
+            )
             access = re.fullmatch(r"vlan\s+access\s+(\d+)", line, re.IGNORECASE)
             native = re.fullmatch(r"vlan\s+trunk\s+native\s+(\d+)", line, re.IGNORECASE)
             allowed = re.fullmatch(r"vlan\s+trunk\s+allowed\s+(.+)", line, re.IGNORECASE)
-            if access or native:
-                vlan_id = int((access or native).group(1))
+            if lag or comware_lag:
+                lag_name = (lag or comware_lag).group(1)
+                if comware_lag:
+                    lag_name = f"Bridge-Aggregation{lag_name}"
+                if not lag_name.lower().startswith(("lag", "trk", "bridge-aggregation")):
+                    lag_name = f"lag {lag_name}"
+                get_interface(lag_name)
+                for name in current_interfaces:
+                    get_interface(name).lag = lag_name
+            elif link_type:
+                mode = (
+                    InterfaceMode.ACCESS
+                    if link_type.group(1).lower() == "access"
+                    else InterfaceMode.TAGGED
+                )
+                for name in current_interfaces:
+                    get_interface(name).mode = mode
+            elif comware_access:
+                vlan_id = int(comware_access.group(1))
+                get_vlan(vlan_id)
+                for name in current_interfaces:
+                    interface = get_interface(name)
+                    interface.mode = InterfaceMode.ACCESS
+                    interface.untagged_vlan = vlan_id
+            elif comware_native:
+                vlan_id = int(comware_native.group(1))
                 get_vlan(vlan_id)
                 for name in current_interfaces:
                     get_interface(name).untagged_vlan = vlan_id
+            elif comware_trunk:
+                vlan_ids = _expand_number_list(comware_trunk.group(1))
+                for vlan_id in vlan_ids:
+                    get_vlan(vlan_id)
+                for name in current_interfaces:
+                    interface = get_interface(name)
+                    interface.mode = InterfaceMode.TAGGED
+                    interface.tagged_vlans = sorted({*interface.tagged_vlans, *vlan_ids})
+            elif comware_hybrid:
+                vlan_ids = _expand_number_list(comware_hybrid.group(1))
+                tagged = comware_hybrid.group(2).lower() == "tagged"
+                for vlan_id in vlan_ids:
+                    get_vlan(vlan_id)
+                for name in current_interfaces:
+                    interface = get_interface(name)
+                    interface.mode = InterfaceMode.TAGGED
+                    if tagged:
+                        interface.tagged_vlans = sorted({*interface.tagged_vlans, *vlan_ids})
+                    elif vlan_ids:
+                        interface.untagged_vlan = vlan_ids[0]
+            elif access or native:
+                vlan_id = int((access or native).group(1))
+                get_vlan(vlan_id)
+                for name in current_interfaces:
+                    interface = get_interface(name)
+                    interface.untagged_vlan = vlan_id
+                    interface.mode = InterfaceMode.ACCESS if access else InterfaceMode.TAGGED
             elif allowed:
                 vlan_ids = _expand_number_list(allowed.group(1))
                 for vlan_id in vlan_ids:
@@ -141,9 +245,11 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
                     get_interface(name).tagged_vlans = vlan_ids
 
     for interface in interfaces.values():
+        if interface.untagged_vlan in interface.tagged_vlans:
+            interface.tagged_vlans.remove(interface.untagged_vlan)
         if interface.tagged_vlans:
             interface.mode = InterfaceMode.TAGGED
-        elif interface.untagged_vlan is not None:
+        elif interface.untagged_vlan is not None and interface.mode is InterfaceMode.OTHER:
             interface.mode = InterfaceMode.ACCESS
 
     return ConfigurationData(

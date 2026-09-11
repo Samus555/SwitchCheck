@@ -110,6 +110,7 @@
         </form>
 
         <div id="error" class="alert" role="alert" hidden></div>
+        <div id="action-message" class="alert action-alert" role="status" hidden></div>
 
         <section id="results" class="results" hidden>
           <div class="results-heading">
@@ -118,6 +119,13 @@
               <h2>Interface results</h2>
             </div>
             <button id="new-comparison" class="button button-secondary" type="button">New comparison</button>
+          </div>
+          <div id="batch-toolbar" class="batch-toolbar">
+            <span><strong id="selected-count">0</strong> changes selected</span>
+            <div>
+              <button id="clear-selection" class="button button-secondary" type="button" disabled>Clear</button>
+              <button id="apply-selected" class="button button-primary batch-apply" type="button" disabled>Apply selected</button>
+            </div>
           </div>
           <div id="summary" class="summary-grid"></div>
           <div class="card results-card">
@@ -156,7 +164,7 @@
             <div class="table-scroll">
               <table>
                 <thead>
-                  <tr><th>VLAN ID</th><th>Status</th><th>Aruba</th><th>NetBox</th><th>Differences</th></tr>
+                  <tr><th>VLAN ID</th><th>Status</th><th>Aruba</th><th>NetBox</th><th>Differences</th><th></th></tr>
                 </thead>
                 <tbody id="vlan-result-body"></tbody>
               </table>
