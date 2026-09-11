@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from switchcheck.aruba import parse_aruba_config
+from switchcheck.aruba import parse_aruba_configuration
 from switchcheck.comparison import compare_interfaces
 from switchcheck.models import CompareRequest, ComparisonResult
 from switchcheck.netbox import NetBoxClient, NetBoxError
@@ -43,8 +43,8 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/compare", response_model=ComparisonResult)
 async def compare(payload: CompareRequest) -> ComparisonResult:
-    aruba_interfaces = parse_aruba_config(payload.config)
-    if not aruba_interfaces:
+    aruba = parse_aruba_configuration(payload.config)
+    if not aruba.interfaces:
         raise HTTPException(
             status_code=422,
             detail="No supported interface configuration was found in the Aruba config.",
@@ -54,8 +54,18 @@ async def compare(payload: CompareRequest) -> ComparisonResult:
         async with NetBoxClient(
             str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
         ) as client:
-            netbox_interfaces = await client.get_interfaces(payload.device)
+            netbox = await client.get_configuration(
+                payload.device, {vlan.vid for vlan in aruba.vlans}
+            )
     except NetBoxError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return compare_interfaces(aruba_interfaces, netbox_interfaces)
+    return compare_interfaces(
+        aruba.interfaces,
+        netbox.interfaces,
+        aruba.vlans,
+        netbox.vlans,
+        payload.config,
+        netbox.rendered_config,
+        netbox.rendered_config_error,
+    )

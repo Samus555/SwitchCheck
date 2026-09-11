@@ -41,6 +41,25 @@ def test_compare_endpoint_fetches_netbox_and_returns_result() -> None:
             },
         )
     )
+    respx.post("https://netbox.example/api/dcim/devices/7/render-config/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "configtemplate": {"id": 3, "name": "aruba-cx"},
+                "content": "interface 1/1/1\n description Office\n vlan access 10",
+            },
+        )
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "count": 1,
+                "next": None,
+                "results": [{"id": 10, "vid": 10, "name": "", "description": ""}],
+            },
+        )
+    )
 
     response = client.post(
         "/api/compare",
@@ -54,6 +73,8 @@ def test_compare_endpoint_fetches_netbox_and_returns_result() -> None:
 
     assert response.status_code == 200
     assert response.json()["summary"]["matches"] == 1
+    assert response.json()["vlan_summary"]["matches"] == 1
+    assert response.json()["config"]["available"] is True
 
 
 def test_compare_rejects_config_without_interfaces() -> None:

@@ -1,4 +1,4 @@
-from switchcheck.aruba import parse_aruba_config
+from switchcheck.aruba import parse_aruba_config, parse_aruba_configuration
 from switchcheck.models import InterfaceMode
 
 
@@ -52,3 +52,23 @@ vlan 20
     assert interfaces[0].tagged_vlans == [20]
     assert interfaces[0].mode is InterfaceMode.TAGGED
     assert interfaces[1].enabled is False
+
+
+def test_parses_vlan_names_descriptions_and_interface_membership() -> None:
+    config = """
+vlan 10
+   name "Users"
+   description "Employee access"
+   untagged 1
+vlan 20 name "Voice"
+   tagged 1
+"""
+
+    parsed = parse_aruba_configuration(config)
+
+    assert [vlan.model_dump() for vlan in parsed.vlans] == [
+        {"vid": 10, "name": "Users", "description": "Employee access"},
+        {"vid": 20, "name": "Voice", "description": ""},
+    ]
+    assert parsed.interfaces[0].untagged_vlan == 10
+    assert parsed.interfaces[0].tagged_vlans == [20]
