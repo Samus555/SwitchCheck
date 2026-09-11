@@ -8,7 +8,7 @@ interface intent stored in NetBox. It has no database, user accounts, or server-
 - Supports ArubaOS-Switch VLAN membership and Aruba CX interface syntax
 - Normalizes interface names across platforms by ignoring spaces and letter case
 - Compares interface state, description, mode, untagged VLAN, and tagged VLANs
-- Detects Aruba CX LAG and ArubaOS-Switch trunk membership
+- Detects Aruba CX LAG, ArubaOS-Switch trunk, and Comware Bridge-Aggregation membership
 - Compares VLAN IDs, names, and descriptions
 - Highlights line-by-line differences against the configuration rendered by NetBox
 - Adds missing interfaces/VLANs and imports selected Aruba values into NetBox

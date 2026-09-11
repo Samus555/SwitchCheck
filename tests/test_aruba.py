@@ -98,3 +98,31 @@ interface 1/1/2
         "2": "Trk1",
         "Trk1": None,
     }
+
+
+def test_parses_comware_bridge_aggregation_and_vlan_commands() -> None:
+    parsed = parse_aruba_configuration(
+        """
+interface Bridge-Aggregation1
+ description Core uplink
+ port link-type trunk
+ port trunk pvid vlan 100
+ port trunk permit vlan 100 200 to 202
+interface Ten-GigabitEthernet1/0/1
+ undo shutdown
+ port link-aggregation group 1
+interface GigabitEthernet1/0/2
+ port link-type access
+ port access vlan 300
+"""
+    )
+    interfaces = {item.name: item for item in parsed.interfaces}
+
+    aggregate = interfaces["Bridge-Aggregation1"]
+    assert aggregate.mode is InterfaceMode.TAGGED
+    assert aggregate.untagged_vlan == 100
+    assert aggregate.tagged_vlans == [200, 201, 202]
+    assert interfaces["Ten-GigabitEthernet1/0/1"].lag == "Bridge-Aggregation1"
+    assert interfaces["GigabitEthernet1/0/2"].mode is InterfaceMode.ACCESS
+    assert interfaces["GigabitEthernet1/0/2"].untagged_vlan == 300
+    assert [vlan.vid for vlan in parsed.vlans] == [100, 200, 201, 202, 300]
