@@ -116,14 +116,38 @@ class NetBoxClient:
             raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
         return exact[0]
 
+    async def _get_device_group(self, device: dict[str, Any]) -> list[dict[str, Any]]:
+        virtual_chassis = device.get("virtual_chassis") or {}
+        chassis_id = virtual_chassis.get("id")
+        if chassis_id is None:
+            return [device]
+
+        members = await self._get_paginated(
+            "dcim/devices/", {"virtual_chassis_id": chassis_id, "limit": 100}
+        )
+        members_by_id = {member["id"]: member for member in members}
+        members_by_id.setdefault(device["id"], device)
+        return list(members_by_id.values())
+
+    async def _get_interface_records(
+        self, devices: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        interfaces: list[dict[str, Any]] = []
+        for device in devices:
+            interfaces.extend(
+                await self._get_paginated(
+                    "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
+                )
+            )
+        return interfaces
+
     async def get_configuration(
         self, device_name: str, aruba_vlan_ids: set[int] | None = None
     ) -> ConfigurationData:
         device = await self._find_device(device_name)
         rendered_config, rendered_config_error = await self._render_config(device["id"])
-        interface_results = await self._get_paginated(
-            "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
-        )
+        devices = await self._get_device_group(device)
+        interface_results = await self._get_interface_records(devices)
         interfaces = [self._to_interface(item) for item in interface_results]
 
         relevant_vids = set(aruba_vlan_ids or ())
@@ -181,9 +205,8 @@ class NetBoxClient:
             raise NetBoxError("Select at least one supported interface field to import.")
 
         device = await self._find_device(device_name)
-        interface_results = await self._get_paginated(
-            "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
-        )
+        devices = await self._get_device_group(device)
+        interface_results = await self._get_interface_records(devices)
         normalized_name = self._normalize_interface_name(source.name)
         target = next(
             (
@@ -251,9 +274,10 @@ class NetBoxClient:
             payload["lag"] = lag["id"] if lag else None
 
         if create:
+            target_device = self._select_interface_device(source.name, devices, device)
             payload.update(
                 {
-                    "device": device["id"],
+                    "device": target_device["id"],
                     "name": source.name,
                     "type": "lag" if normalized_name.startswith(("lag", "trk")) else "other",
                 }
@@ -314,6 +338,24 @@ class NetBoxClient:
     @staticmethod
     def _normalize_interface_name(name: str) -> str:
         return re.sub(r"\s+", "", name).lower()
+
+    @staticmethod
+    def _select_interface_device(
+        interface_name: str,
+        devices: list[dict[str, Any]],
+        default: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = re.sub(r"\s+", "", interface_name).lower()
+        if normalized.startswith(("lag", "trk", "bridge-aggregation")):
+            return default
+
+        member_match = re.search(r"\d+", normalized)
+        if member_match:
+            member_position = int(member_match.group())
+            for device in devices:
+                if device.get("vc_position") == member_position:
+                    return device
+        return default
 
     @staticmethod
     def _to_interface(item: dict[str, Any]) -> Interface:
