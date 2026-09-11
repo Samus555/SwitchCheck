@@ -26,6 +26,15 @@ Open <http://127.0.0.1:8000>.
 The NetBox token needs read access to devices, interfaces, and VLANs. SwitchCheck accepts NetBox
 URLs with or without the `/api` suffix. TLS certificate verification is enabled by default.
 
+## Run with Docker
+
+```bash
+docker build -t switchcheck .
+docker run --rm -p 8000:8000 switchcheck
+```
+
+The container runs as an unprivileged user and includes a health check for `/health`.
+
 ## Supported configuration
 
 Aruba CX:
