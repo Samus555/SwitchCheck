@@ -41,6 +41,10 @@ class NetBoxClient:
             status = exc.response.status_code
             if status in {401, 403}:
                 raise NetBoxError("NetBox rejected the API token.") from exc
+            if status == 400:
+                detail = self._error_detail(exc.response)
+                message = f"NetBox rejected the API request: {detail}" if detail else ""
+                raise NetBoxError(message or "NetBox rejected the API request (HTTP 400).") from exc
             if status == 404:
                 raise NetBoxError("The NetBox API endpoint was not found.") from exc
             raise NetBoxError(f"NetBox returned HTTP {status}.") from exc
@@ -102,29 +106,21 @@ class NetBoxClient:
                 relevant_vids.add(interface.untagged_vlan)
             relevant_vids.update(interface.tagged_vlans)
 
-        site = device.get("site") or {}
-        site_id = site.get("id")
-        vlan_results: list[dict[str, Any]] = []
-        if site_id is not None:
-            vlan_results.extend(
-                await self._get_paginated("ipam/vlans/", {"site_id": site_id, "limit": 100})
-            )
-        if relevant_vids:
-            vlan_results.extend(
-                await self._get_paginated(
-                    "ipam/vlans/",
-                    {"vid": ",".join(str(vid) for vid in sorted(relevant_vids)), "limit": 100},
-                )
-            )
-
-        applicable = [item for item in vlan_results if self._vlan_applies_to_site(item, site_id)]
+        site_id = (device.get("site") or {}).get("id")
+        location_id = (device.get("location") or {}).get("id")
+        vlan_results = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        applicable = [
+            item
+            for item in vlan_results
+            if self._vlan_applies_to_device(item, site_id, location_id, relevant_vids)
+        ]
         by_vid: dict[int, dict[str, Any]] = {}
         for item in applicable:
             vid = int(item["vid"])
             current = by_vid.get(vid)
-            if current is None or self._scope_priority(item, site_id) > self._scope_priority(
-                current, site_id
-            ):
+            if current is None or self._scope_priority(
+                item, site_id, location_id
+            ) > self._scope_priority(current, site_id, location_id):
                 by_vid[vid] = item
 
         return ConfigurationData(
@@ -167,17 +163,49 @@ class NetBoxClient:
         )
 
     @staticmethod
-    def _vlan_applies_to_site(item: dict[str, Any], site_id: int | None) -> bool:
+    def _vlan_applies_to_device(
+        item: dict[str, Any],
+        site_id: int | None,
+        location_id: int | None,
+        relevant_vids: set[int],
+    ) -> bool:
         site = item.get("site")
         scope = item.get("scope")
         if site:
             return site_id is not None and site.get("id") == site_id
-        if scope and item.get("scope_type") in {"dcim.site", "dcim | site"}:
-            return site_id is not None and scope.get("id") == site_id
-        return not scope
+        if scope:
+            scope_type = item.get("scope_type")
+            if scope_type in {"dcim.site", "dcim | site"}:
+                return site_id is not None and scope.get("id") == site_id
+            if scope_type in {"dcim.location", "dcim | location"}:
+                return location_id is not None and scope.get("id") == location_id
+            return False
+        return int(item["vid"]) in relevant_vids
 
     @staticmethod
-    def _scope_priority(item: dict[str, Any], site_id: int | None) -> int:
+    def _scope_priority(item: dict[str, Any], site_id: int | None, location_id: int | None) -> int:
         site = item.get("site") or {}
         scope = item.get("scope") or {}
-        return int(site.get("id") == site_id or scope.get("id") == site_id)
+        return int(
+            (site_id is not None and site.get("id") == site_id)
+            or (site_id is not None and scope.get("id") == site_id)
+            or (location_id is not None and scope.get("id") == location_id)
+        )
+
+    @staticmethod
+    def _error_detail(response: httpx.Response) -> str:
+        try:
+            data = response.json()
+        except ValueError:
+            return ""
+        if isinstance(data, dict):
+            for key in ("detail", "error"):
+                if isinstance(data.get(key), str):
+                    return data[key][:300]
+            messages = [
+                f"{field}: {', '.join(str(value) for value in values)}"
+                for field, values in data.items()
+                if isinstance(values, list)
+            ]
+            return "; ".join(messages)[:300]
+        return ""
