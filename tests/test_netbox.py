@@ -125,9 +125,7 @@ def test_selects_virtual_chassis_member_when_creating_interface() -> None:
     primary = {"id": 7, "vc_position": 1}
     secondary = {"id": 8, "vc_position": 2}
 
-    selected = NetBoxClient._select_interface_device(
-        "2/1/12", [primary, secondary], primary
-    )
+    selected = NetBoxClient._select_interface_device("2/1/12", [primary, secondary], primary)
 
     assert selected == secondary
 

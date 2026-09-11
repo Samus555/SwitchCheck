@@ -129,9 +129,7 @@ class NetBoxClient:
         members_by_id.setdefault(device["id"], device)
         return list(members_by_id.values())
 
-    async def _get_interface_records(
-        self, devices: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    async def _get_interface_records(self, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
         interfaces: list[dict[str, Any]] = []
         for device in devices:
             interfaces.extend(
