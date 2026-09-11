@@ -11,7 +11,11 @@ from switchcheck.models import (
     CompareRequest,
     ComparisonResult,
     ImportResource,
+    NetBoxBatchImportRequest,
+    NetBoxBatchImportResult,
+    NetBoxImportAction,
     NetBoxImportRequest,
+    NetBoxImportResult,
 )
 from switchcheck.netbox import NetBoxClient, NetBoxError
 
@@ -82,24 +86,62 @@ async def import_to_netbox(payload: NetBoxImportRequest) -> dict[str, str]:
         async with NetBoxClient(
             str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
         ) as client:
-            if payload.resource is ImportResource.INTERFACE:
-                if payload.interface is None:
-                    raise HTTPException(status_code=422, detail="Interface data is required.")
-                message = await client.import_interface(
-                    payload.device,
-                    payload.interface,
-                    payload.fields,
-                    create=payload.create,
-                )
-            else:
-                if payload.vlan is None:
-                    raise HTTPException(status_code=422, detail="VLAN data is required.")
-                message = await client.import_vlan(
-                    payload.device,
-                    payload.vlan,
-                    payload.fields,
-                    create=payload.create,
-                )
+            message = await _execute_import(client, payload.device, payload)
     except NetBoxError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"message": message}
+
+
+@app.post("/api/netbox/import-batch", response_model=NetBoxBatchImportResult)
+async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBatchImportResult:
+    results: list[NetBoxImportResult] = []
+    actions = sorted(payload.actions, key=_import_priority)
+    async with NetBoxClient(
+        str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
+    ) as client:
+        for action in actions:
+            try:
+                message = await _execute_import(client, payload.device, action)
+                results.append(NetBoxImportResult(success=True, message=message))
+            except NetBoxError as exc:
+                results.append(NetBoxImportResult(success=False, message=str(exc)))
+
+    applied = sum(result.success for result in results)
+    return NetBoxBatchImportResult(
+        applied=applied,
+        failed=len(results) - applied,
+        results=results,
+    )
+
+
+async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImportAction) -> str:
+    if action.resource is ImportResource.INTERFACE:
+        if action.interface is None:
+            raise NetBoxError("Interface data is required.")
+        return await client.import_interface(
+            device,
+            action.interface,
+            action.fields,
+            create=action.create,
+        )
+    if action.vlan is None:
+        raise NetBoxError("VLAN data is required.")
+    return await client.import_vlan(
+        device,
+        action.vlan,
+        action.fields,
+        create=action.create,
+    )
+
+
+def _import_priority(action: NetBoxImportAction) -> int:
+    if action.create and action.resource is ImportResource.VLAN:
+        return 0
+    if action.create and action.interface is not None:
+        name = action.interface.name.replace(" ", "").lower()
+        if name.startswith(("lag", "trk")):
+            return 1
+        return 2
+    if action.resource is ImportResource.VLAN:
+        return 3
+    return 4

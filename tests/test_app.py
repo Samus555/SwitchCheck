@@ -118,3 +118,56 @@ def test_import_endpoint_adds_vlan_to_netbox() -> None:
     assert response.status_code == 200
     assert response.json() == {"message": "VLAN 10 was added to NetBox."}
     assert create_route.called
+
+
+def test_batch_import_orders_dependencies(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeNetBoxClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            pass
+
+        async def import_vlan(self, _device, source, _fields, *, create=False):
+            calls.append(f"vlan:{source.vid}:{create}")
+            return f"VLAN {source.vid} added"
+
+        async def import_interface(self, _device, source, _fields, *, create=False):
+            calls.append(f"interface:{source.name}:{create}")
+            return f"Interface {source.name} added"
+
+    monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
+    response = client.post(
+        "/api/netbox/import-batch",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "device": "access-01",
+            "actions": [
+                {
+                    "resource": "interface",
+                    "create": True,
+                    "interface": {"name": "1/1/1", "untagged_vlan": 10},
+                },
+                {
+                    "resource": "vlan",
+                    "create": True,
+                    "vlan": {"vid": 10, "name": "Users"},
+                },
+                {
+                    "resource": "interface",
+                    "create": True,
+                    "interface": {"name": "lag 1"},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] == 3
+    assert calls == ["vlan:10:True", "interface:lag 1:True", "interface:1/1/1:True"]

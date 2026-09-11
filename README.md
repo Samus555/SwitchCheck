@@ -12,6 +12,7 @@ interface intent stored in NetBox. It has no database, user accounts, or server-
 - Compares VLAN IDs, names, and descriptions
 - Highlights line-by-line differences against the configuration rendered by NetBox
 - Adds missing interfaces/VLANs and imports selected Aruba values into NetBox
+- Applies multiple selected NetBox changes in one dependency-aware batch
 - Reads live interface data from the NetBox REST API
 - Highlights matches, configuration drift, and interfaces missing on either side
 - Keeps the configuration and API token in memory only for the duration of a request

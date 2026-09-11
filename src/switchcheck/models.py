@@ -112,13 +112,35 @@ class ImportResource(StrEnum):
     VLAN = "vlan"
 
 
-class NetBoxImportRequest(BaseModel):
-    netbox_url: HttpUrl
-    token: str = Field(min_length=1)
-    device: str = Field(min_length=1)
-    verify_tls: bool = True
+class NetBoxImportAction(BaseModel):
     resource: ImportResource
     create: bool = False
     fields: list[str] = Field(default_factory=list)
     interface: Interface | None = None
     vlan: Vlan | None = None
+
+
+class NetBoxImportRequest(NetBoxImportAction):
+    netbox_url: HttpUrl
+    token: str = Field(min_length=1)
+    device: str = Field(min_length=1)
+    verify_tls: bool = True
+
+
+class NetBoxBatchImportRequest(BaseModel):
+    netbox_url: HttpUrl
+    token: str = Field(min_length=1)
+    device: str = Field(min_length=1)
+    verify_tls: bool = True
+    actions: list[NetBoxImportAction] = Field(min_length=1, max_length=100)
+
+
+class NetBoxImportResult(BaseModel):
+    success: bool
+    message: str
+
+
+class NetBoxBatchImportResult(BaseModel):
+    applied: int
+    failed: int
+    results: list[NetBoxImportResult]
