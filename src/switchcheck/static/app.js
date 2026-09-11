@@ -243,7 +243,6 @@ function renderVlans() {
     const row = document.createElement("tr");
     const aruba = item.aruba;
     const netbox = item.netbox;
-    const differences = item.differences.map((difference) => difference.field).join(", ");
     const actions = document.createElement("td");
     const detailRow = vlanDetailRowFor(item);
     if (item.status === "only_aruba") {
@@ -263,7 +262,7 @@ function renderVlans() {
       statusCell(item.status),
       cell(formatVlan(aruba)),
       cell(formatVlan(netbox)),
-      cell(differences || (item.status === "match" ? "No drift detected" : "VLAN not present")),
+      differenceCell(item, "VLAN not present"),
       actions,
     );
     rows.push(row, detailRow);
@@ -403,17 +402,15 @@ function statusCell(status) {
   return td;
 }
 
-function differenceCell(item) {
+function differenceCell(item, missingLabel = "Interface not present") {
   const td = document.createElement("td");
   const list = element("div", "diff-list");
   if (item.differences.length) {
     item.differences.forEach((difference) => {
       list.append(element("span", "diff-chip", difference.field));
     });
-  } else if (item.status === "match") {
-    list.append(element("span", "", "No drift detected"));
-  } else {
-    list.append(element("span", "", "Interface not present"));
+  } else if (item.status !== "match") {
+    list.append(element("span", "", missingLabel));
   }
   td.append(list);
   return td;
