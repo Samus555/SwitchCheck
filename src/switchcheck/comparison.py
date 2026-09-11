@@ -1,13 +1,13 @@
-from difflib import SequenceMatcher
 import re
+from difflib import SequenceMatcher
 
 from switchcheck.models import (
     CompareStatus,
+    ComparisonResult,
+    ComparisonSummary,
     ConfigComparison,
     ConfigDiffLine,
     ConfigDiffSummary,
-    ComparisonResult,
-    ComparisonSummary,
     FieldDifference,
     Interface,
     InterfaceComparison,
@@ -162,28 +162,25 @@ def compare_configs(
     ) in matcher.get_opcodes():
         current_block = current_lines[current_start:current_end]
         rendered_block = rendered_lines[rendered_start:rendered_end]
-        if operation == "equal":
-            status = "unchanged"
-        elif operation == "replace":
-            status = "changed"
-        elif operation == "delete":
-            status = "current_only"
-        else:
-            status = "rendered_only"
-
         row_count = max(len(current_block), len(rendered_block))
         for offset in range(row_count):
+            has_current = offset < len(current_block)
+            has_rendered = offset < len(rendered_block)
+            if operation == "equal":
+                status = "unchanged"
+            elif operation == "replace" and has_current and has_rendered:
+                status = "changed"
+            elif has_current:
+                status = "current_only"
+            else:
+                status = "rendered_only"
             lines.append(
                 ConfigDiffLine(
                     status=status,
-                    current_number=current_start + offset + 1
-                    if offset < len(current_block)
-                    else None,
-                    current_text=current_block[offset] if offset < len(current_block) else None,
-                    rendered_number=rendered_start + offset + 1
-                    if offset < len(rendered_block)
-                    else None,
-                    rendered_text=rendered_block[offset] if offset < len(rendered_block) else None,
+                    current_number=current_start + offset + 1 if has_current else None,
+                    current_text=current_block[offset] if has_current else None,
+                    rendered_number=rendered_start + offset + 1 if has_rendered else None,
+                    rendered_text=rendered_block[offset] if has_rendered else None,
                 )
             )
 
