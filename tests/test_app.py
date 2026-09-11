@@ -89,3 +89,32 @@ def test_compare_rejects_config_without_interfaces() -> None:
     )
 
     assert response.status_code == 422
+
+
+@respx.mock
+def test_import_endpoint_adds_vlan_to_netbox() -> None:
+    respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+    create_route = respx.post("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(201, json={"id": 10})
+    )
+
+    response = client.post(
+        "/api/netbox/import",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "device": "access-01",
+            "resource": "vlan",
+            "create": True,
+            "vlan": {"vid": 10, "name": "Users", "description": "Access"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "VLAN 10 was added to NetBox."}
+    assert create_route.called
