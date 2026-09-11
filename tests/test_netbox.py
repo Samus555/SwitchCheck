@@ -74,6 +74,64 @@ async def test_fetches_unfiltered_vlans_and_scopes_them_locally() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_fetches_interfaces_from_every_virtual_chassis_member() -> None:
+    def device_response(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("name"):
+            results = [
+                {
+                    "id": 7,
+                    "name": "stack-01",
+                    "vc_position": 1,
+                    "virtual_chassis": {"id": 3, "name": "stack"},
+                }
+            ]
+        else:
+            results = [
+                {"id": 7, "name": "stack-01", "vc_position": 1},
+                {"id": 8, "name": "stack-02", "vc_position": 2},
+            ]
+        return httpx.Response(200, json={"next": None, "results": results})
+
+    def interface_response(request: httpx.Request) -> httpx.Response:
+        device_id = int(request.url.params["device_id"])
+        name = "1/1/1" if device_id == 7 else "2/1/1"
+        return httpx.Response(200, json={"next": None, "results": [{"name": name}]})
+
+    device_route = respx.get("https://netbox.example/api/dcim/devices/").mock(
+        side_effect=device_response
+    )
+    interface_route = respx.get("https://netbox.example/api/dcim/interfaces/").mock(
+        side_effect=interface_response
+    )
+    respx.post("https://netbox.example/api/dcim/devices/7/render-config/").mock(
+        return_value=httpx.Response(200, json={"content": "interface 1/1/1\ninterface 2/1/1"})
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        result = await client.get_configuration("stack-01")
+
+    assert [interface.name for interface in result.interfaces] == ["1/1/1", "2/1/1"]
+    assert dict(device_route.calls[1].request.url.params) == {
+        "virtual_chassis_id": "3",
+        "limit": "100",
+    }
+    assert [call.request.url.params["device_id"] for call in interface_route.calls] == ["7", "8"]
+
+
+def test_selects_virtual_chassis_member_when_creating_interface() -> None:
+    primary = {"id": 7, "vc_position": 1}
+    secondary = {"id": 8, "vc_position": 2}
+
+    selected = NetBoxClient._select_interface_device("2/1/12", [primary, secondary], primary)
+
+    assert selected == secondary
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_exposes_safe_netbox_validation_details() -> None:
     respx.get("https://netbox.example/api/test/").mock(
         return_value=httpx.Response(400, json={"vid": ["Enter a valid number."]})
