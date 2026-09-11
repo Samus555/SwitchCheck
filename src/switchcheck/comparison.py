@@ -15,7 +15,14 @@ from switchcheck.models import (
     VlanComparison,
 )
 
-INTERFACE_FIELDS = ("enabled", "description", "mode", "untagged_vlan", "tagged_vlans")
+INTERFACE_FIELDS = (
+    "enabled",
+    "description",
+    "mode",
+    "untagged_vlan",
+    "tagged_vlans",
+    "lag",
+)
 VLAN_FIELDS = ("name", "description")
 
 
@@ -69,7 +76,7 @@ def compare_interfaces(
                 netbox=getattr(netbox, field),
             )
             for field in INTERFACE_FIELDS
-            if getattr(aruba, field) != getattr(netbox, field)
+            if not _interface_values_equal(field, getattr(aruba, field), getattr(netbox, field))
         ]
         comparisons.append(
             InterfaceComparison(
@@ -130,6 +137,12 @@ def compare_vlans(aruba_vlans: list[Vlan], netbox_vlans: list[Vlan]) -> list[Vla
             )
         )
     return comparisons
+
+
+def _interface_values_equal(field: str, aruba_value: object, netbox_value: object) -> bool:
+    if field == "lag" and isinstance(aruba_value, str) and isinstance(netbox_value, str):
+        return normalize_interface_name(aruba_value) == normalize_interface_name(netbox_value)
+    return aruba_value == netbox_value
 
 
 def compare_configs(

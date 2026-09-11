@@ -39,6 +39,7 @@ def test_normalizes_interface_names_and_compares_vlan_membership() -> None:
             mode=InterfaceMode.TAGGED,
             untagged_vlan=10,
             tagged_vlans=[20, 30],
+            lag="lag1",
         )
     ]
     netbox = [
@@ -47,6 +48,7 @@ def test_normalizes_interface_names_and_compares_vlan_membership() -> None:
             mode=InterfaceMode.TAGGED,
             untagged_vlan=10,
             tagged_vlans=[20, 40],
+            lag="LAG 1",
         )
     ]
 

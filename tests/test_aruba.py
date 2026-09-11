@@ -25,6 +25,7 @@ interface 1/1/2
         "mode": InterfaceMode.TAGGED,
         "untagged_vlan": 10,
         "tagged_vlans": [20, 30, 31],
+        "lag": None,
     }
     assert interfaces[1].enabled is False
     assert interfaces[1].mode is InterfaceMode.ACCESS
@@ -72,3 +73,28 @@ vlan 20 name "Voice"
     ]
     assert parsed.interfaces[0].untagged_vlan == 10
     assert parsed.interfaces[0].tagged_vlans == [20]
+
+
+def test_detects_cx_and_arubaos_link_aggregation_membership() -> None:
+    cx = parse_aruba_configuration(
+        """
+interface lag 1
+   description Uplink bundle
+interface 1/1/1
+   lag 1
+interface 1/1/2
+   lag 1 mode active
+"""
+    )
+    aos = parse_aruba_configuration("trunk 1-2 Trk1 lacp")
+
+    assert {item.name: item.lag for item in cx.interfaces} == {
+        "1/1/1": "lag 1",
+        "1/1/2": "lag 1",
+        "lag 1": None,
+    }
+    assert {item.name: item.lag for item in aos.interfaces} == {
+        "1": "Trk1",
+        "2": "Trk1",
+        "Trk1": None,
+    }

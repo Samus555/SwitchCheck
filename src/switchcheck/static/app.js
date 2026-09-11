@@ -4,6 +4,7 @@ const fileInput = document.querySelector("#config-file");
 const fileName = document.querySelector("#file-name");
 const lineCount = document.querySelector("#line-count");
 const errorBox = document.querySelector("#error");
+const actionMessage = document.querySelector("#action-message");
 const resultsSection = document.querySelector("#results");
 const resultBody = document.querySelector("#result-body");
 const vlanResultBody = document.querySelector("#vlan-result-body");
@@ -92,6 +93,51 @@ function showError(message) {
   errorBox.hidden = !message;
 }
 
+function actionButton(label, resource, source, fields, create = false) {
+  const button = element("button", "button button-secondary action-button", label);
+  button.type = "button";
+  button.addEventListener("click", () => importToNetBox(button, resource, source, fields, create));
+  return button;
+}
+
+async function importToNetBox(button, resource, source, fields, create) {
+  const operation = create ? `add this ${resource}` : `import ${fields.join(", ")}`;
+  if (!window.confirm(`Use the Aruba values to ${operation} in NetBox?`)) return;
+
+  button.disabled = true;
+  actionMessage.hidden = true;
+  const payload = {
+    netbox_url: document.querySelector("#netbox-url").value,
+    token: document.querySelector("#token").value,
+    device: document.querySelector("#device").value,
+    verify_tls: document.querySelector("#verify-tls").checked,
+    resource,
+    create,
+    fields,
+    [resource]: source,
+  };
+
+  try {
+    const response = await fetch("/api/netbox/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "The NetBox update failed.");
+    actionMessage.textContent = data.message;
+    actionMessage.classList.remove("action-error");
+    actionMessage.hidden = false;
+    form.requestSubmit();
+  } catch (error) {
+    actionMessage.textContent = error.message || "The NetBox update failed.";
+    actionMessage.classList.add("action-error");
+    actionMessage.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderSummary(summary, selector = "#summary") {
   const items = [
     ["Total", summary.total, ""],
@@ -111,28 +157,67 @@ function renderSummary(summary, selector = "#summary") {
 }
 
 function renderVlans() {
-  const rows = comparisonData.vlans.map((item) => {
+  const rows = [];
+  comparisonData.vlans.forEach((item) => {
     const row = document.createElement("tr");
     const aruba = item.aruba;
     const netbox = item.netbox;
     const differences = item.differences.map((difference) => difference.field).join(", ");
+    const actions = document.createElement("td");
+    const detailRow = vlanDetailRowFor(item);
+    if (item.status === "only_aruba") {
+      actions.append(actionButton("Add to NetBox", "vlan", aruba, [], true));
+    }
+    const detailButton = element("button", "details-button", "Details");
+    detailButton.type = "button";
+    detailButton.addEventListener("click", () => {
+      const opening = detailRow.hidden;
+      detailRow.hidden = !opening;
+      detailButton.textContent = opening ? "Hide" : "Details";
+    });
+    actions.append(detailButton);
     row.append(
       cell(String(item.vid), "interface-name"),
       statusCell(item.status),
       cell(formatVlan(aruba)),
       cell(formatVlan(netbox)),
       cell(differences || (item.status === "match" ? "No drift detected" : "VLAN not present")),
+      actions,
     );
-    return row;
+    rows.push(row, detailRow);
   });
   vlanResultBody.replaceChildren(...rows);
-  document.querySelector("#empty-vlans").hidden = rows.length !== 0;
+  document.querySelector("#empty-vlans").hidden = comparisonData.vlans.length !== 0;
 }
 
 function formatVlan(vlan) {
   if (!vlan) return "—";
   const name = vlan.name || "Unnamed";
   return vlan.description ? `${name} — ${vlan.description}` : name;
+}
+
+function vlanDetailRowFor(item) {
+  const row = element("tr", "detail-row");
+  row.hidden = true;
+  const td = document.createElement("td");
+  td.colSpan = 6;
+  const panel = element("div", "detail-panel");
+  ["name", "description"].forEach((field) => {
+    const detail = element("div", "detail-item");
+    detail.append(
+      element("span", "", field),
+      element("code", "", `Aruba: ${formatValue(item.aruba?.[field])}`),
+      element("code", "", `NetBox: ${formatValue(item.netbox?.[field])}`),
+    );
+    const isDifferent = item.differences.some((difference) => difference.field === field);
+    if (isDifferent && item.aruba && item.netbox) {
+      detail.append(actionButton("Import", "vlan", item.aruba, [field]));
+    }
+    panel.append(detail);
+  });
+  td.append(panel);
+  row.append(td);
+  return row;
 }
 
 function renderConfigDiff() {
@@ -199,14 +284,17 @@ function renderResults() {
 
     const actionCell = document.createElement("td");
     const detailRow = detailRowFor(item);
-    const button = element("button", "details-button", "Details");
-    button.type = "button";
-    button.addEventListener("click", () => {
+    const detailButton = element("button", "details-button", "Details");
+    detailButton.type = "button";
+    detailButton.addEventListener("click", () => {
       const opening = detailRow.hidden;
       detailRow.hidden = !opening;
-      button.textContent = opening ? "Hide" : "Details";
+      detailButton.textContent = opening ? "Hide" : "Details";
     });
-    actionCell.append(button);
+    if (item.status === "only_aruba") {
+      actionCell.append(actionButton("Add to NetBox", "interface", item.aruba, [], true));
+    }
+    actionCell.append(detailButton);
     row.append(actionCell);
     rows.push(row, detailRow);
   }
@@ -249,7 +337,7 @@ function detailRowFor(item) {
   const td = document.createElement("td");
   td.colSpan = 4;
   const panel = element("div", "detail-panel");
-  const fields = ["enabled", "description", "mode", "untagged_vlan", "tagged_vlans"];
+  const fields = ["enabled", "description", "mode", "untagged_vlan", "tagged_vlans", "lag"];
   fields.forEach((field) => {
     const detail = element("div", "detail-item");
     detail.append(
@@ -257,6 +345,12 @@ function detailRowFor(item) {
       element("code", "", `Aruba: ${formatValue(item.aruba?.[field])}`),
       element("code", "", `NetBox: ${formatValue(item.netbox?.[field])}`),
     );
+    const isDifferent = item.differences.some(
+      (difference) => difference.field.replaceAll(" ", "_") === field,
+    );
+    if (isDifferent && item.aruba && item.netbox) {
+      detail.append(actionButton("Import", "interface", item.aruba, [field]));
+    }
     panel.append(detail);
   });
   td.append(panel);

@@ -8,8 +8,10 @@ interface intent stored in NetBox. It has no database, user accounts, or server-
 - Supports ArubaOS-Switch VLAN membership and Aruba CX interface syntax
 - Normalizes interface names across platforms by ignoring spaces and letter case
 - Compares interface state, description, mode, untagged VLAN, and tagged VLANs
+- Detects Aruba CX LAG and ArubaOS-Switch trunk membership
 - Compares VLAN IDs, names, and descriptions
 - Highlights line-by-line differences against the configuration rendered by NetBox
+- Adds missing interfaces/VLANs and imports selected Aruba values into NetBox
 - Reads live interface data from the NetBox REST API
 - Highlights matches, configuration drift, and interfaces missing on either side
 - Keeps the configuration and API token in memory only for the duration of a request
@@ -26,9 +28,10 @@ uv run uvicorn switchcheck.app:app --reload
 
 Open <http://127.0.0.1:8000>.
 
-The NetBox token needs read access to devices, interfaces, and VLANs. To enable rendered
-configuration comparison, it also needs the `render_config` action for devices. SwitchCheck accepts
-NetBox URLs with or without the `/api` suffix. TLS certificate verification is enabled by default.
+The NetBox token needs read access to devices, interfaces, and VLANs. Write permissions for
+interfaces and VLANs are required to use the import actions. To enable rendered configuration
+comparison, it also needs the `render_config` action for devices. SwitchCheck accepts NetBox URLs
+with or without the `/api` suffix. TLS certificate verification is enabled by default.
 
 ## Run with Docker
 

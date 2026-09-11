@@ -1,3 +1,4 @@
+import re
 from typing import Any
 from urllib.parse import urljoin
 
@@ -84,16 +85,41 @@ class NetBoxClient:
             next_url = data.get("next")
         return results
 
+    async def _write(self, method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await self.client.request(
+                method,
+                urljoin(self.base_url, path),
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                raise NetBoxError(
+                    "The API token does not have permission to modify NetBox."
+                ) from exc
+            detail = self._error_detail(exc.response)
+            if detail:
+                raise NetBoxError(f"NetBox rejected the update: {detail}") from exc
+            raise NetBoxError(f"NetBox rejected the update (HTTP {status}).") from exc
+        except (httpx.RequestError, ValueError) as exc:
+            raise NetBoxError("Could not send the update to NetBox.") from exc
+
+    async def _find_device(self, device_name: str) -> dict[str, Any]:
+        devices = await self._get("dcim/devices/", {"name": device_name, "limit": 2})
+        exact = [
+            device for device in devices.get("results", []) if device.get("name") == device_name
+        ]
+        if not exact:
+            raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
+        return exact[0]
+
     async def get_configuration(
         self, device_name: str, aruba_vlan_ids: set[int] | None = None
     ) -> ConfigurationData:
-        devices = await self._get("dcim/devices/", {"name": device_name, "limit": 2})
-        matches = devices.get("results", [])
-        exact = [device for device in matches if device.get("name") == device_name]
-        if not exact:
-            raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
-
-        device = exact[0]
+        device = await self._find_device(device_name)
         rendered_config, rendered_config_error = await self._render_config(device["id"])
         interface_results = await self._get_paginated(
             "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
@@ -134,10 +160,166 @@ class NetBoxClient:
         """Return interfaces for callers using the original client API."""
         return (await self.get_configuration(device_name)).interfaces
 
+    async def import_interface(
+        self,
+        device_name: str,
+        source: Interface,
+        fields: list[str],
+        *,
+        create: bool = False,
+    ) -> str:
+        allowed = {
+            "enabled",
+            "description",
+            "mode",
+            "untagged_vlan",
+            "tagged_vlans",
+            "lag",
+        }
+        requested = allowed if create else set(fields) & allowed
+        if not requested:
+            raise NetBoxError("Select at least one supported interface field to import.")
+
+        device = await self._find_device(device_name)
+        interface_results = await self._get_paginated(
+            "dcim/interfaces/", {"device_id": device["id"], "limit": 100}
+        )
+        normalized_name = self._normalize_interface_name(source.name)
+        target = next(
+            (
+                item
+                for item in interface_results
+                if self._normalize_interface_name(str(item["name"])) == normalized_name
+            ),
+            None,
+        )
+        if create and target is not None:
+            raise NetBoxError(f'Interface "{source.name}" already exists in NetBox.')
+        if not create and target is None:
+            raise NetBoxError(f'Interface "{source.name}" was not found in NetBox.')
+
+        vlan_results = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        source_vids = set(source.tagged_vlans)
+        if source.untagged_vlan is not None:
+            source_vids.add(source.untagged_vlan)
+        site_id = (device.get("site") or {}).get("id")
+        location_id = (device.get("location") or {}).get("id")
+        applicable_vlans = [
+            item
+            for item in vlan_results
+            if self._vlan_applies_to_device(item, site_id, location_id, source_vids)
+        ]
+        vlan_by_vid: dict[int, dict[str, Any]] = {}
+        for item in applicable_vlans:
+            vid = int(item["vid"])
+            current = vlan_by_vid.get(vid)
+            if current is None or self._scope_priority(
+                item, site_id, location_id
+            ) > self._scope_priority(current, site_id, location_id):
+                vlan_by_vid[vid] = item
+        vlan_ids = {vid: item["id"] for vid, item in vlan_by_vid.items()}
+        interfaces_by_name = {
+            self._normalize_interface_name(str(item["name"])): item for item in interface_results
+        }
+
+        payload: dict[str, Any] = {}
+        if "enabled" in requested:
+            payload["enabled"] = source.enabled
+        if "description" in requested:
+            payload["description"] = source.description
+        if "mode" in requested:
+            payload["mode"] = None if source.mode is InterfaceMode.OTHER else source.mode.value
+        if "untagged_vlan" in requested:
+            if source.untagged_vlan is None:
+                payload["untagged_vlan"] = None
+            elif source.untagged_vlan not in vlan_ids:
+                raise NetBoxError(f"Add VLAN {source.untagged_vlan} to NetBox first.")
+            else:
+                payload["untagged_vlan"] = vlan_ids[source.untagged_vlan]
+        if "tagged_vlans" in requested:
+            missing_vlans = [vid for vid in source.tagged_vlans if vid not in vlan_ids]
+            if missing_vlans:
+                missing = ", ".join(str(vid) for vid in missing_vlans)
+                raise NetBoxError(f"Add tagged VLANs {missing} to NetBox first.")
+            payload["tagged_vlans"] = [
+                vlan_ids[vid] for vid in source.tagged_vlans if vid in vlan_ids
+            ]
+        if "lag" in requested:
+            lag = interfaces_by_name.get(self._normalize_interface_name(source.lag or ""))
+            if source.lag and lag is None:
+                raise NetBoxError(f'Add aggregate interface "{source.lag}" to NetBox first.')
+            payload["lag"] = lag["id"] if lag else None
+
+        if create:
+            payload.update(
+                {
+                    "device": device["id"],
+                    "name": source.name,
+                    "type": "lag" if normalized_name.startswith(("lag", "trk")) else "other",
+                }
+            )
+            await self._write("POST", "dcim/interfaces/", payload)
+            return f'Interface "{source.name}" was added to NetBox.'
+
+        await self._write("PATCH", f"dcim/interfaces/{target['id']}/", payload)
+        return f'Interface "{source.name}" was updated in NetBox.'
+
+    async def import_vlan(
+        self,
+        device_name: str,
+        source: Vlan,
+        fields: list[str],
+        *,
+        create: bool = False,
+    ) -> str:
+        allowed = {"name", "description"}
+        requested = allowed if create else set(fields) & allowed
+        if not requested:
+            raise NetBoxError("Select at least one supported VLAN field to import.")
+
+        device = await self._find_device(device_name)
+        site_id = (device.get("site") or {}).get("id")
+        location_id = (device.get("location") or {}).get("id")
+        vlan_results = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        candidates = [
+            item
+            for item in vlan_results
+            if int(item["vid"]) == source.vid
+            and self._vlan_applies_to_device(item, site_id, location_id, {source.vid})
+        ]
+        target = max(
+            candidates,
+            key=lambda item: self._scope_priority(item, site_id, location_id),
+            default=None,
+        )
+        if create and target is not None:
+            raise NetBoxError(f"VLAN {source.vid} already exists in NetBox.")
+        if not create and target is None:
+            raise NetBoxError(f"VLAN {source.vid} was not found in NetBox.")
+
+        payload: dict[str, Any] = {}
+        if "name" in requested:
+            payload["name"] = source.name or f"VLAN {source.vid}"
+        if "description" in requested:
+            payload["description"] = source.description
+
+        if create:
+            payload["vid"] = source.vid
+            await self._write("POST", "ipam/vlans/", payload)
+            return f"VLAN {source.vid} was added to NetBox."
+
+        await self._write("PATCH", f"ipam/vlans/{target['id']}/", payload)
+        return f"VLAN {source.vid} was updated in NetBox."
+
+    @staticmethod
+    def _normalize_interface_name(name: str) -> str:
+        return re.sub(r"\s+", "", name).lower()
+
     @staticmethod
     def _to_interface(item: dict[str, Any]) -> Interface:
         untagged = item.get("untagged_vlan")
         tagged = item.get("tagged_vlans") or []
+        lag = item.get("lag")
         mode_value = (item.get("mode") or {}).get("value")
         mode = InterfaceMode.OTHER
         if mode_value == "access":
@@ -152,6 +334,7 @@ class NetBoxClient:
             mode=mode,
             untagged_vlan=untagged.get("vid") if untagged else None,
             tagged_vlans=sorted(vlan["vid"] for vlan in tagged if "vid" in vlan),
+            lag=lag.get("name") if lag else None,
         )
 
     @staticmethod

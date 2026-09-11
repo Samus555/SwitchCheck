@@ -64,6 +64,21 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
         if not line or line.startswith(("!", "#", ";")):
             continue
 
+        trunk_match = re.fullmatch(
+            r"trunk\s+(\S+)\s+(\S+)(?:\s+(?:trunk|lacp))?",
+            line,
+            re.IGNORECASE,
+        )
+        if trunk_match:
+            member_names = _expand_interfaces(trunk_match.group(1))
+            lag_name = trunk_match.group(2)
+            get_interface(lag_name)
+            for name in member_names:
+                get_interface(name).lag = lag_name
+            current_interfaces = []
+            current_vlans = []
+            continue
+
         interface_match = re.fullmatch(r"interface\s+(.+)", line, re.IGNORECASE)
         if interface_match:
             current_interfaces = _expand_interfaces(interface_match.group(1))
@@ -125,10 +140,18 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
             for name in current_interfaces:
                 get_interface(name).enabled = True
         else:
+            lag = re.fullmatch(r"lag\s+(\S+)(?:\s+mode\s+\S+)?", line, re.IGNORECASE)
             access = re.fullmatch(r"vlan\s+access\s+(\d+)", line, re.IGNORECASE)
             native = re.fullmatch(r"vlan\s+trunk\s+native\s+(\d+)", line, re.IGNORECASE)
             allowed = re.fullmatch(r"vlan\s+trunk\s+allowed\s+(.+)", line, re.IGNORECASE)
-            if access or native:
+            if lag:
+                lag_name = lag.group(1)
+                if not lag_name.lower().startswith(("lag", "trk")):
+                    lag_name = f"lag {lag_name}"
+                get_interface(lag_name)
+                for name in current_interfaces:
+                    get_interface(name).lag = lag_name
+            elif access or native:
                 vlan_id = int((access or native).group(1))
                 get_vlan(vlan_id)
                 for name in current_interfaces:

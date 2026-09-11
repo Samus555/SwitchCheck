@@ -7,7 +7,12 @@ from fastapi.templating import Jinja2Templates
 
 from switchcheck.aruba import parse_aruba_configuration
 from switchcheck.comparison import compare_interfaces
-from switchcheck.models import CompareRequest, ComparisonResult
+from switchcheck.models import (
+    CompareRequest,
+    ComparisonResult,
+    ImportResource,
+    NetBoxImportRequest,
+)
 from switchcheck.netbox import NetBoxClient, NetBoxError
 
 PACKAGE_DIR = Path(__file__).parent
@@ -69,3 +74,32 @@ async def compare(payload: CompareRequest) -> ComparisonResult:
         netbox.rendered_config,
         netbox.rendered_config_error,
     )
+
+
+@app.post("/api/netbox/import")
+async def import_to_netbox(payload: NetBoxImportRequest) -> dict[str, str]:
+    try:
+        async with NetBoxClient(
+            str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
+        ) as client:
+            if payload.resource is ImportResource.INTERFACE:
+                if payload.interface is None:
+                    raise HTTPException(status_code=422, detail="Interface data is required.")
+                message = await client.import_interface(
+                    payload.device,
+                    payload.interface,
+                    payload.fields,
+                    create=payload.create,
+                )
+            else:
+                if payload.vlan is None:
+                    raise HTTPException(status_code=422, detail="VLAN data is required.")
+                message = await client.import_vlan(
+                    payload.device,
+                    payload.vlan,
+                    payload.fields,
+                    create=payload.create,
+                )
+    except NetBoxError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"message": message}
