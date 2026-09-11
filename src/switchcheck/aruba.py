@@ -185,9 +185,8 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
                 lag_name = (lag or comware_lag).group(1)
                 if comware_lag:
                     lag_name = f"Bridge-Aggregation{lag_name}"
-                if not lag_name.lower().startswith(("lag", "trk")):
-                    if not lag_name.lower().startswith("bridge-aggregation"):
-                        lag_name = f"lag {lag_name}"
+                if not lag_name.lower().startswith(("lag", "trk", "bridge-aggregation")):
+                    lag_name = f"lag {lag_name}"
                 get_interface(lag_name)
                 for name in current_interfaces:
                     get_interface(name).lag = lag_name
