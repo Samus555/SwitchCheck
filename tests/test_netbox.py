@@ -68,7 +68,7 @@ async def test_fetches_unfiltered_vlans_and_scopes_them_locally() -> None:
 
     assert [vlan.vid for vlan in result.vlans] == [10, 20, 50]
     assert result.rendered_config is None
-    assert vlan_route.calls[0].request.url.params == {"limit": "100"}
+    assert dict(vlan_route.calls[0].request.url.params) == {"limit": "100"}
 
 
 @pytest.mark.asyncio
