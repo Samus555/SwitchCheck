@@ -74,9 +74,7 @@ def parse_aruba_config(config: str) -> list[Interface]:
                 for name in _expand_interfaces(membership.group(2)):
                     interface = get_interface(name)
                     if tagged:
-                        interface.tagged_vlans = sorted(
-                            {*interface.tagged_vlans, current_vlan}
-                        )
+                        interface.tagged_vlans = sorted({*interface.tagged_vlans, current_vlan})
                     else:
                         interface.untagged_vlan = current_vlan
                 continue
