@@ -13,7 +13,7 @@ client = TestClient(app)
 def test_home_and_health() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Switch intent, verified." in response.text
+    assert "Aruba configuration" in response.text
     assert client.get("/health").json() == {"status": "ok"}
 
 
