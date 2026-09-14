@@ -17,6 +17,14 @@ const clearSelectionButton = document.querySelector("#clear-selection");
 const previewSelectedButton = document.querySelector("#preview-selected");
 const bulkAuditButton = document.querySelector("#bulk-audit");
 const hero = document.querySelector(".hero");
+const applyProgressDialog = document.querySelector("#apply-progress-dialog");
+const applyProgress = document.querySelector("#apply-progress");
+const applyProgressSummary = document.querySelector("#apply-progress-summary");
+const applyProgressCount = document.querySelector("#apply-progress-count");
+const applyProgressPercent = document.querySelector("#apply-progress-percent");
+const applyProgressCurrent = document.querySelector("#apply-progress-current");
+const applyProgressResults = document.querySelector("#apply-progress-results");
+const closeApplyProgressButton = document.querySelector("#close-apply-progress");
 
 let comparisonData = null;
 let activeFilter = "all";
@@ -191,10 +199,12 @@ function actionButton(label, resource, source, fields, create = false) {
 
 function selectionControl(resource, source, fields, create = false) {
   const identifier = resource === "interface" ? source.name : source.vid;
-  const key = `${resource}:${create}:${identifier}:${[...fields].sort().join(",")}`;
+  const action = changeAction(resource, source, fields, create);
+  const key = changeKey(action);
   const label = element("label", "selection-control");
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
+  checkbox.dataset.changeKey = key;
   checkbox.checked = selectedChanges.has(key);
   checkbox.setAttribute(
     "aria-label",
@@ -202,19 +212,70 @@ function selectionControl(resource, source, fields, create = false) {
   );
   checkbox.addEventListener("change", () => {
     if (checkbox.checked) {
-      selectedChanges.set(key, {
-        resource,
-        create,
-        fields,
-        [resource]: source,
-      });
+      selectedChanges.set(key, action);
     } else {
       selectedChanges.delete(key);
     }
+    syncSelectionControls();
     updateSelectionToolbar();
   });
   label.append(checkbox, element("span", "", "Select"));
   return label;
+}
+
+function changeAction(resource, source, fields, create = false) {
+  return { resource, create, fields, [resource]: source };
+}
+
+function changeKey(action) {
+  const source = action[action.resource];
+  const identifier = action.resource === "interface" ? source.name : source.vid;
+  return `${action.resource}:${action.create}:${identifier}:${[...action.fields].sort().join(",")}`;
+}
+
+function proposedActions(resource, item) {
+  const source = item.aruba;
+  if (!source || item.status === "match" || item.status === "only_netbox") return [];
+  if (item.status === "only_aruba") return [changeAction(resource, source, [], true)];
+  return item.differences.map((difference) =>
+    changeAction(resource, source, [difference.field.replaceAll(" ", "_")]),
+  );
+}
+
+function selectAllControl(resource, item) {
+  const actions = proposedActions(resource, item);
+  if (!actions.length) return null;
+  const label = element("label", "selection-control select-all-control");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.dataset.changeKeys = actions.map(changeKey).join("|");
+  checkbox.setAttribute(
+    "aria-label",
+    `Select all proposed changes for ${resource} ${resource === "interface" ? item.name : item.vid}`,
+  );
+  checkbox.addEventListener("change", () => {
+    actions.forEach((action) => {
+      const key = changeKey(action);
+      if (checkbox.checked) selectedChanges.set(key, action);
+      else selectedChanges.delete(key);
+    });
+    syncSelectionControls();
+    updateSelectionToolbar();
+  });
+  label.append(checkbox, element("span", "", "Select all changes"));
+  return label;
+}
+
+function syncSelectionControls() {
+  document.querySelectorAll("[data-change-key]").forEach((checkbox) => {
+    checkbox.checked = selectedChanges.has(checkbox.dataset.changeKey);
+  });
+  document.querySelectorAll("[data-change-keys]").forEach((checkbox) => {
+    const keys = checkbox.dataset.changeKeys.split("|").filter(Boolean);
+    const selected = keys.filter((key) => selectedChanges.has(key)).length;
+    checkbox.checked = selected === keys.length;
+    checkbox.indeterminate = selected > 0 && selected < keys.length;
+  });
 }
 
 function updateSelectionToolbar() {
@@ -297,44 +358,100 @@ async function importToNetBox(button, resource, source, fields, create) {
 }
 
 async function applySelectedChanges() {
-  const actions = [...selectedChanges.values()];
+  const actions = [...selectedChanges.values()].sort(
+    (left, right) => importPriority(left) - importPriority(right),
+  );
   if (!actions.length) return;
   if (!window.confirm(`Apply ${actions.length} selected changes to NetBox?`)) return;
 
   applySelectedButton.disabled = true;
   applySelectedButton.textContent = "Applying…";
   actionMessage.hidden = true;
+  openApplyProgress(actions.length);
+  const results = [];
   try {
-    const response = await fetch("/api/netbox/import-batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        netbox_url: document.querySelector("#netbox-url").value,
-        token: document.querySelector("#token").value,
-        device: document.querySelector("#device").value,
-        verify_tls: document.querySelector("#verify-tls").checked,
-        actions,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "The NetBox batch update failed.");
-    const failures = data.results.filter((result) => !result.success);
+    for (const [index, action] of actions.entries()) {
+      const identifier = action.resource === "interface" ? action.interface.name : action.vlan.vid;
+      applyProgressCurrent.textContent =
+        `Applying ${action.resource} ${identifier} (${index + 1} of ${actions.length})…`;
+      const response = await fetch("/api/netbox/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...connectionPayload(),
+          device: document.querySelector("#device").value,
+          ...action,
+        }),
+      });
+      const data = await response.json();
+      results.push({
+        success: response.ok,
+        message: response.ok ? data.message : data.detail || `Updating ${action.resource} ${identifier} failed.`,
+      });
+      updateApplyProgress(index + 1, actions.length);
+    }
+    const failures = results.filter((result) => !result.success);
+    const applied = results.length - failures.length;
     actionMessage.textContent = failures.length
-      ? `${data.applied} applied, ${data.failed} failed: ${failures.map((item) => item.message).join("; ")}`
-      : `${data.applied} selected changes were applied to NetBox.`;
+      ? `${applied} applied, ${failures.length} failed: ${failures.map((item) => item.message).join("; ")}`
+      : `${applied} selected changes were applied to NetBox.`;
     actionMessage.classList.toggle("action-error", failures.length > 0);
     actionMessage.hidden = false;
+    finishApplyProgress(applied, failures);
     selectedChanges.clear();
+    syncSelectionControls();
     updateSelectionToolbar();
-    form.requestSubmit();
   } catch (error) {
     actionMessage.textContent = error.message || "The NetBox batch update failed.";
     actionMessage.classList.add("action-error");
     actionMessage.hidden = false;
+    finishApplyProgress(results.filter((result) => result.success).length, [
+      ...results.filter((result) => !result.success),
+      { message: actionMessage.textContent },
+    ]);
   } finally {
     applySelectedButton.textContent = "Apply selected";
     updateSelectionToolbar();
   }
+}
+
+function importPriority(action) {
+  if (action.create && action.resource === "vlan") return 0;
+  if (action.create && action.interface) {
+    return /^(lag|trk)/.test(action.interface.name.replaceAll(" ", "").toLowerCase()) ? 1 : 2;
+  }
+  return action.resource === "vlan" ? 3 : 4;
+}
+
+function openApplyProgress(total) {
+  applyProgress.max = total;
+  applyProgress.value = 0;
+  applyProgressSummary.textContent = `Applying ${total} selected ${total === 1 ? "change" : "changes"} to NetBox.`;
+  applyProgressCount.textContent = `0 of ${total} complete`;
+  applyProgressPercent.textContent = "0%";
+  applyProgressCurrent.textContent = "Connecting to NetBox…";
+  applyProgressResults.hidden = true;
+  applyProgressResults.replaceChildren();
+  closeApplyProgressButton.hidden = true;
+  applyProgressDialog.showModal();
+}
+
+function updateApplyProgress(completed, total) {
+  const percent = Math.round((completed / total) * 100);
+  applyProgress.value = completed;
+  applyProgressCount.textContent = `${completed} of ${total} complete`;
+  applyProgressPercent.textContent = `${percent}%`;
+}
+
+function finishApplyProgress(applied, failures) {
+  applyProgressCurrent.textContent = failures.length ? "Completed with errors." : "All changes applied.";
+  applyProgressResults.textContent = failures.length
+    ? `${applied} applied · ${failures.length} failed\n${failures.map((item) => item.message).join("\n")}`
+    : `${applied} ${applied === 1 ? "change" : "changes"} applied successfully.`;
+  applyProgressResults.classList.toggle("has-errors", failures.length > 0);
+  applyProgressResults.hidden = false;
+  closeApplyProgressButton.hidden = false;
+  closeApplyProgressButton.focus();
 }
 
 function renderSummary(summary, selector = "#summary") {
@@ -364,9 +481,10 @@ function renderVlans() {
     const actions = document.createElement("td");
     const detailRow = vlanDetailRowFor(item);
     if (item.status === "only_aruba") {
-      actions.append(selectionControl("vlan", aruba, [], true));
       actions.append(actionButton("Add to NetBox", "vlan", aruba, [], true));
     }
+    const selectAll = selectAllControl("vlan", item);
+    if (selectAll) actions.prepend(selectAll);
     const detailButton = element("button", "details-button", "Details");
     detailButton.type = "button";
     detailButton.addEventListener("click", () => {
@@ -502,9 +620,10 @@ function renderResults() {
       detailButton.textContent = opening ? "Hide" : "Details";
     });
     if (item.status === "only_aruba") {
-      actionCell.append(selectionControl("interface", item.aruba, [], true));
       actionCell.append(actionButton("Add to NetBox", "interface", item.aruba, [], true));
     }
+    const selectAll = selectAllControl("interface", item);
+    if (selectAll) actionCell.prepend(selectAll);
     actionCell.append(detailButton);
     row.append(actionCell);
     rows.push(row, detailRow);
@@ -625,10 +744,12 @@ applySelectedButton.addEventListener("click", applySelectedChanges);
 previewSelectedButton.addEventListener("click", previewSelectedChanges);
 clearSelectionButton.addEventListener("click", () => {
   selectedChanges.clear();
-  document.querySelectorAll(".selection-control input").forEach((checkbox) => {
-    checkbox.checked = false;
-  });
+  syncSelectionControls();
   updateSelectionToolbar();
+});
+closeApplyProgressButton.addEventListener("click", () => {
+  applyProgressDialog.close();
+  form.requestSubmit();
 });
 document.querySelector("#new-comparison").addEventListener("click", () => {
   resultsSection.hidden = true;
