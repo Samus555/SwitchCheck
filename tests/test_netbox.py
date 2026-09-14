@@ -197,3 +197,46 @@ async def test_adds_missing_vlan() -> None:
     assert post_route.calls[0].request.content == (
         b'{"name":"Users","description":"Employee access","vid":10}'
     )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_discovers_devices_and_maps_extended_interface_fields() -> None:
+    route = respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "next": None,
+                "results": [
+                    {
+                        "name": "edge-01",
+                        "display": "Edge 01",
+                        "site": {"name": "HQ"},
+                        "status": {"label": "Active"},
+                    }
+                ],
+            },
+        )
+    )
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        devices = await client.list_devices("edge")
+        interface = client._to_interface(
+            {
+                "name": "1/1/1",
+                "mtu": 9198,
+                "speed": 10_000_000,
+                "duplex": {"value": "full"},
+                "type": {"value": "10gbase-x-sfpp"},
+                "primary_mac_address": {"mac_address": "00:11:22:33:44:55"},
+                "mgmt_only": True,
+                "custom_fields": {"owner": "network"},
+            }
+        )
+
+    assert route.calls[0].request.url.params["q"] == "edge"
+    assert devices[0].site == "HQ"
+    assert interface.speed == 10000
+    assert interface.type == "10gbase-x-sfpp"
+    assert interface.mac_address == "00:11:22:33:44:55"
+    assert interface.custom_fields == {"owner": "network"}

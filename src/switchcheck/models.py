@@ -210,12 +210,17 @@ class NetBoxBatchImportResult(BaseModel):
     results: list[NetBoxImportResult]
 
 
+class PlannedValue(BaseModel):
+    before: object
+    after: object
+
+
 class ChangePlanItem(BaseModel):
     resource: ImportResource
     identifier: str
     operation: str
     fields: list[str]
-    summary: str
+    changes: dict[str, PlannedValue]
 
 
 class NetBoxChangePlanRequest(NetBoxBatchImportRequest):

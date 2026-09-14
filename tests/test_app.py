@@ -235,8 +235,10 @@ def test_change_plan_reports_before_and_after_without_writing(monkeypatch) -> No
     )
 
     assert response.status_code == 200
-    assert '"from": "Old"' in response.json()["actions"][0]["summary"]
-    assert '"to": "New"' in response.json()["actions"][0]["summary"]
+    assert response.json()["actions"][0]["changes"]["description"] == {
+        "before": "Old",
+        "after": "New",
+    }
 
 
 def test_bulk_compare_summarizes_device_drift(monkeypatch) -> None:

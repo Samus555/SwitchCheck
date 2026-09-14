@@ -189,7 +189,7 @@ async function previewSelectedChanges() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "The change plan could not be generated.");
     actionMessage.textContent = data.actions
-      .map((item, index) => `${index + 1}. ${item.operation} ${item.resource} ${item.identifier}\n${item.summary}`)
+      .map((item, index) => `${index + 1}. ${item.operation} ${item.resource} ${item.identifier}\n${JSON.stringify(item.changes, null, 2)}`)
       .join("\n\n");
     actionMessage.classList.remove("action-error");
     actionMessage.style.whiteSpace = "pre-wrap";

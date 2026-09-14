@@ -1,5 +1,4 @@
 import asyncio
-import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -195,8 +194,8 @@ async def plan_netbox_changes(payload: NetBoxChangePlanRequest) -> NetBoxChangeP
         fields = list(source.model_fields) if action.create else action.fields
         changes = {
             field: {
-                "from": getattr(existing, field, None) if existing else None,
-                "to": getattr(source, field, None),
+                "before": getattr(existing, field, None) if existing else None,
+                "after": getattr(source, field, None),
             }
             for field in fields
             if field not in {"name", "vid"} or action.create
@@ -207,7 +206,7 @@ async def plan_netbox_changes(payload: NetBoxChangePlanRequest) -> NetBoxChangeP
                 identifier=identifier,
                 operation="create" if action.create else "update",
                 fields=fields,
-                summary=json.dumps(changes, default=str, sort_keys=True),
+                changes=changes,
             )
         )
     return NetBoxChangePlan(actions=plans)

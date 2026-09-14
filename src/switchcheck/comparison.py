@@ -255,7 +255,9 @@ def generate_aruba_commands(
         commands.append(f"interface {target.name}")
         commands.append("    no shutdown" if target.enabled else "    shutdown")
         commands.append(
-            f"    description {target.description}" if target.description else "    no description"
+            f"    description {_cli_value(target.description)}"
+            if target.description
+            else "    no description"
         )
         if target.mode is InterfaceMode.ACCESS and target.untagged_vlan is not None:
             commands.append(f"    vlan access {target.untagged_vlan}")
@@ -279,11 +281,15 @@ def generate_aruba_commands(
             continue
         commands.append(f"vlan {target.vid}")
         if target.name:
-            commands.append(f"    name {target.name}")
+            commands.append(f"    name {_cli_value(target.name)}")
         if target.description:
-            commands.append(f"    description {target.description}")
+            commands.append(f"    description {_cli_value(target.description)}")
         commands.append("exit")
     return commands
+
+
+def _cli_value(value: str) -> str:
+    return re.sub(r"[\r\n]+", " ", value).strip()
 
 
 def _summarize(
