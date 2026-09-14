@@ -11,6 +11,7 @@ from switchcheck.models import (
     FieldDifference,
     Interface,
     InterfaceComparison,
+    InterfaceMode,
     Vlan,
     VlanComparison,
 )
@@ -22,6 +23,13 @@ INTERFACE_FIELDS = (
     "untagged_vlan",
     "tagged_vlans",
     "lag",
+    "mtu",
+    "speed",
+    "duplex",
+    "type",
+    "mac_address",
+    "mgmt_only",
+    "custom_fields",
 )
 VLAN_FIELDS = ("name", "description")
 
@@ -96,6 +104,7 @@ def compare_interfaces(
         vlan_summary=_summarize(vlan_comparisons),
         vlans=vlan_comparisons,
         config=compare_configs(current_config, rendered_config, rendered_config_error),
+        remediation_commands=generate_aruba_commands(comparisons),
     )
 
 
@@ -161,9 +170,14 @@ def compare_configs(
             lines=[],
         )
 
-    current_lines = current.splitlines()
-    rendered_lines = rendered.splitlines()
-    matcher = SequenceMatcher(None, current_lines, rendered_lines, autojunk=False)
+    current_lines = _significant_config_lines(current)
+    rendered_lines = _significant_config_lines(rendered)
+    matcher = SequenceMatcher(
+        None,
+        [normalized for _, _, normalized in current_lines],
+        [normalized for _, _, normalized in rendered_lines],
+        autojunk=False,
+    )
     lines: list[ConfigDiffLine] = []
 
     for (
@@ -190,10 +204,10 @@ def compare_configs(
             lines.append(
                 ConfigDiffLine(
                     status=status,
-                    current_number=current_start + offset + 1 if has_current else None,
-                    current_text=current_block[offset] if has_current else None,
-                    rendered_number=rendered_start + offset + 1 if has_rendered else None,
-                    rendered_text=rendered_block[offset] if has_rendered else None,
+                    current_number=current_block[offset][0] if has_current else None,
+                    current_text=current_block[offset][1] if has_current else None,
+                    rendered_number=rendered_block[offset][0] if has_rendered else None,
+                    rendered_text=rendered_block[offset][1] if has_rendered else None,
                 )
             )
 
@@ -202,6 +216,49 @@ def compare_configs(
         for status in ("unchanged", "changed", "current_only", "rendered_only")
     }
     return ConfigComparison(summary=ConfigDiffSummary(**counts), lines=lines)
+
+
+def _significant_config_lines(config: str) -> list[tuple[int, str, str]]:
+    """Keep display text and line numbers while normalizing cosmetic differences."""
+    result: list[tuple[int, str, str]] = []
+    for number, text in enumerate(config.splitlines(), 1):
+        stripped = text.strip()
+        if not stripped or stripped.startswith(("!", "#", ";")):
+            continue
+        normalized = re.sub(r"\s+", " ", stripped).lower()
+        result.append((number, text, normalized))
+    return result
+
+
+def generate_aruba_commands(comparisons: list[InterfaceComparison]) -> list[str]:
+    """Generate Aruba CX commands which make the switch follow NetBox intent."""
+    commands: list[str] = []
+    for item in comparisons:
+        target = item.netbox
+        if target is None or item.status is CompareStatus.MATCH:
+            continue
+        commands.append(f"interface {target.name}")
+        commands.append("    no shutdown" if target.enabled else "    shutdown")
+        commands.append(
+            f"    description {target.description}" if target.description else "    no description"
+        )
+        if target.mode is InterfaceMode.ACCESS and target.untagged_vlan is not None:
+            commands.append(f"    vlan access {target.untagged_vlan}")
+        elif target.mode is InterfaceMode.TAGGED:
+            if target.untagged_vlan is not None:
+                commands.append(f"    vlan trunk native {target.untagged_vlan}")
+            if target.tagged_vlans:
+                commands.append(
+                    "    vlan trunk allowed " + ",".join(str(vid) for vid in target.tagged_vlans)
+                )
+        if target.mtu is not None:
+            commands.append(f"    mtu {target.mtu}")
+        if target.speed is not None:
+            commands.append(f"    speed {target.speed}")
+        if target.lag:
+            commands.append(f"    lag {target.lag}")
+        commands.append("exit")
+    return commands
 
 
 def _summarize(

@@ -4,7 +4,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from switchcheck.models import ConfigurationData, Interface, InterfaceMode, Vlan
+from switchcheck.models import ConfigurationData, DeviceSummary, Interface, InterfaceMode, Vlan
 
 
 class NetBoxError(RuntimeError):
@@ -116,6 +116,22 @@ class NetBoxClient:
             raise NetBoxError(f'Device "{device_name}" was not found in NetBox.')
         return exact[0]
 
+    async def list_devices(self, query: str = "") -> list[DeviceSummary]:
+        params: dict[str, Any] = {"limit": 50}
+        if query:
+            params["q"] = query
+        records = await self._get_paginated("dcim/devices/", params)
+        return [
+            DeviceSummary(
+                name=str(item["name"]),
+                display=str(item.get("display") or item["name"]),
+                site=(item.get("site") or {}).get("name"),
+                status=(item.get("status") or {}).get("label"),
+            )
+            for item in records
+            if item.get("name")
+        ]
+
     async def _get_device_group(self, device: dict[str, Any]) -> list[dict[str, Any]]:
         virtual_chassis = device.get("virtual_chassis") or {}
         chassis_id = virtual_chassis.get("id")
@@ -197,6 +213,13 @@ class NetBoxClient:
             "untagged_vlan",
             "tagged_vlans",
             "lag",
+            "mtu",
+            "speed",
+            "duplex",
+            "type",
+            "mac_address",
+            "mgmt_only",
+            "custom_fields",
         }
         requested = allowed if create else set(fields) & allowed
         if not requested:
@@ -270,6 +293,11 @@ class NetBoxClient:
             if source.lag and lag is None:
                 raise NetBoxError(f'Add aggregate interface "{source.lag}" to NetBox first.')
             payload["lag"] = lag["id"] if lag else None
+        for field in ("mtu", "speed", "duplex", "mac_address", "mgmt_only", "custom_fields"):
+            if field in requested:
+                payload[field] = getattr(source, field)
+        if "type" in requested and source.type:
+            payload["type"] = source.type
 
         if create:
             target_device = self._select_interface_device(source.name, devices, device)
@@ -375,6 +403,17 @@ class NetBoxClient:
             untagged_vlan=untagged.get("vid") if untagged else None,
             tagged_vlans=sorted(vlan["vid"] for vlan in tagged if "vid" in vlan),
             lag=lag.get("name") if lag else None,
+            mtu=item.get("mtu"),
+            speed=item.get("speed"),
+            duplex=(item.get("duplex") or {}).get("value")
+            if isinstance(item.get("duplex"), dict)
+            else item.get("duplex"),
+            type=(item.get("type") or {}).get("value")
+            if isinstance(item.get("type"), dict)
+            else item.get("type"),
+            mac_address=item.get("mac_address"),
+            mgmt_only=bool(item.get("mgmt_only", False)),
+            custom_fields=item.get("custom_fields") or {},
         )
 
     @staticmethod

@@ -151,6 +151,12 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
             for name in current_interfaces:
                 get_interface(name).enabled = True
         else:
+            mtu = re.fullmatch(r"mtu\s+(\d+)", line, re.IGNORECASE)
+            speed = re.fullmatch(r"speed\s+(\d+)", line, re.IGNORECASE)
+            duplex = re.fullmatch(r"duplex\s+(full|half|auto)", line, re.IGNORECASE)
+            mac_address = re.fullmatch(
+                r"(?:mac-address|mac)\s+([0-9a-f:.-]+)", line, re.IGNORECASE
+            )
             lag = re.fullmatch(r"lag\s+(\S+)(?:\s+mode\s+\S+)?", line, re.IGNORECASE)
             comware_lag = re.fullmatch(
                 r"port\s+link-aggregation\s+group\s+(\d+)",
@@ -181,7 +187,22 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
             access = re.fullmatch(r"vlan\s+access\s+(\d+)", line, re.IGNORECASE)
             native = re.fullmatch(r"vlan\s+trunk\s+native\s+(\d+)", line, re.IGNORECASE)
             allowed = re.fullmatch(r"vlan\s+trunk\s+allowed\s+(.+)", line, re.IGNORECASE)
-            if lag or comware_lag:
+            if mtu:
+                for name in current_interfaces:
+                    get_interface(name).mtu = int(mtu.group(1))
+            elif speed:
+                for name in current_interfaces:
+                    get_interface(name).speed = int(speed.group(1))
+            elif duplex:
+                for name in current_interfaces:
+                    get_interface(name).duplex = duplex.group(1).lower()
+            elif mac_address:
+                for name in current_interfaces:
+                    get_interface(name).mac_address = mac_address.group(1).lower()
+            elif lowered in {"management-only", "mgmt-only"}:
+                for name in current_interfaces:
+                    get_interface(name).mgmt_only = True
+            elif lag or comware_lag:
                 lag_name = (lag or comware_lag).group(1)
                 if comware_lag:
                     lag_name = f"Bridge-Aggregation{lag_name}"

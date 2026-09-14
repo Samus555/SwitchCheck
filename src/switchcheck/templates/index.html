@@ -39,7 +39,7 @@
                 <label class="button button-secondary file-button">
                   <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4L8 7M5 14v5h14v-5" /></svg>
                   Choose file
-                  <input id="config-file" type="file" accept=".txt,.cfg,.conf,text/plain" />
+                  <input id="config-file" type="file" multiple accept=".txt,.cfg,.conf,text/plain" />
                 </label>
               </div>
               <div class="editor-wrap">
@@ -54,6 +54,18 @@
                   placeholder="interface 1/1/1&#10;    description Uplink to core&#10;    vlan trunk native 10&#10;    vlan trunk allowed 20,30&#10;    no shutdown"
                 ></textarea>
               </div>
+              <details class="connection-tools">
+                <summary>Retrieve over SSH / SFTP</summary>
+                <div class="fields compact-fields">
+                  <label><span>Switch host</span><input id="ssh-host" placeholder="192.0.2.10" /></label>
+                  <label><span>SSH username</span><input id="ssh-username" autocomplete="username" /></label>
+                  <label><span>Password</span><input id="ssh-password" type="password" autocomplete="new-password" /></label>
+                  <label><span>Private key</span><textarea id="ssh-private-key" rows="3" placeholder="Optional PEM private key"></textarea></label>
+                  <label><span>Command</span><input id="ssh-command" value="show running-config" /></label>
+                  <label><span>SFTP path</span><input id="sftp-path" placeholder="Optional: /cfg/running.cfg" /></label>
+                  <button id="fetch-config" class="button button-secondary" type="button">Retrieve configuration</button>
+                </div>
+              </details>
             </section>
 
             <section class="card connection-card">
@@ -86,9 +98,11 @@
                   <span>Device name</span>
                   <div class="input-with-icon">
                     <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h.01M7 15h.01M11 9h6M11 15h6" /></svg>
-                    <input id="device" required placeholder="access-sw-01" />
+                    <input id="device" required list="device-options" placeholder="access-sw-01" />
+                    <datalist id="device-options"></datalist>
                   </div>
                 </label>
+                <button id="discover-devices" class="button button-secondary" type="button">Find NetBox devices</button>
                 <label class="switch-row">
                   <span>
                     <strong>Verify TLS certificate</strong>
@@ -100,6 +114,9 @@
               <button id="submit-button" class="button button-primary" type="submit">
                 <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
                 <span>Run comparison</span>
+              </button>
+              <button id="bulk-audit" class="button button-secondary" type="button" hidden>
+                Audit selected files
               </button>
               <p class="privacy-note">
                 <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
@@ -119,11 +136,17 @@
               <h2>Interface results</h2>
             </div>
             <button id="new-comparison" class="button button-secondary" type="button">New comparison</button>
+            <div class="export-actions">
+              <button class="button button-secondary export-report" data-format="json" type="button">Export JSON</button>
+              <button class="button button-secondary export-report" data-format="csv" type="button">Export CSV</button>
+              <button class="button button-secondary export-report" data-format="html" type="button">Export HTML</button>
+            </div>
           </div>
           <div id="batch-toolbar" class="batch-toolbar">
             <span><strong id="selected-count">0</strong> changes selected</span>
             <div>
               <button id="clear-selection" class="button button-secondary" type="button" disabled>Clear</button>
+              <button id="preview-selected" class="button button-secondary" type="button" disabled>Preview plan</button>
               <button id="apply-selected" class="button button-primary batch-apply" type="button" disabled>Apply selected</button>
             </div>
           </div>
@@ -194,6 +217,15 @@
               </div>
             </div>
           </div>
+          <div class="result-section-heading">
+            <div>
+              <span class="eyebrow">REMEDIATION</span>
+              <h2>NetBox intent as Aruba CX CLI</h2>
+              <p>Review these commands before applying them to a switch.</p>
+            </div>
+            <button id="copy-remediation" class="button button-secondary" type="button">Copy commands</button>
+          </div>
+          <pre id="remediation-commands" class="card remediation-code"></pre>
         </section>
       </main>
 

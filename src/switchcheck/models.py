@@ -17,6 +17,13 @@ class Interface(BaseModel):
     untagged_vlan: int | None = None
     tagged_vlans: list[int] = Field(default_factory=list)
     lag: str | None = None
+    mtu: int | None = None
+    speed: int | None = None
+    duplex: str | None = None
+    type: str | None = None
+    mac_address: str | None = None
+    mgmt_only: bool = False
+    custom_fields: dict[str, object] = Field(default_factory=dict)
 
 
 class Vlan(BaseModel):
@@ -97,6 +104,7 @@ class ComparisonResult(BaseModel):
     vlan_summary: ComparisonSummary
     vlans: list[VlanComparison]
     config: ConfigComparison
+    remediation_commands: list[str] = Field(default_factory=list)
 
 
 class CompareRequest(BaseModel):
@@ -105,6 +113,62 @@ class CompareRequest(BaseModel):
     token: str = Field(min_length=1)
     device: str = Field(min_length=1)
     verify_tls: bool = True
+
+
+class NetBoxConnection(BaseModel):
+    netbox_url: HttpUrl
+    token: str = Field(min_length=1)
+    verify_tls: bool = True
+
+
+class DeviceSummary(BaseModel):
+    name: str
+    display: str
+    site: str | None = None
+    status: str | None = None
+
+
+class DeviceDiscoveryRequest(NetBoxConnection):
+    query: str = ""
+
+
+class SshConfigRequest(BaseModel):
+    host: str = Field(min_length=1)
+    username: str = Field(min_length=1)
+    password: str | None = None
+    private_key: str | None = None
+    port: int = Field(default=22, ge=1, le=65535)
+    command: str = "show running-config"
+    sftp_path: str | None = None
+    known_hosts: str | None = None
+
+
+class SshConfigResult(BaseModel):
+    config: str
+
+
+class BulkAuditItem(BaseModel):
+    device: str = Field(min_length=1)
+    config: str = Field(min_length=1)
+
+
+class BulkCompareRequest(NetBoxConnection):
+    audits: list[BulkAuditItem] = Field(min_length=1, max_length=20)
+
+
+class BulkAuditResult(BaseModel):
+    device: str
+    success: bool
+    comparison: ComparisonResult | None = None
+    error: str | None = None
+
+
+class BulkComparisonResult(BaseModel):
+    total: int
+    successful: int
+    failed: int
+    devices_with_drift: int
+    results: list[BulkAuditResult]
 
 
 class ImportResource(StrEnum):
@@ -144,3 +208,19 @@ class NetBoxBatchImportResult(BaseModel):
     applied: int
     failed: int
     results: list[NetBoxImportResult]
+
+
+class ChangePlanItem(BaseModel):
+    resource: ImportResource
+    identifier: str
+    operation: str
+    fields: list[str]
+    summary: str
+
+
+class NetBoxChangePlanRequest(NetBoxBatchImportRequest):
+    pass
+
+
+class NetBoxChangePlan(BaseModel):
+    actions: list[ChangePlanItem]
