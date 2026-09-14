@@ -5,6 +5,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from switchcheck.app import app
+from switchcheck.models import ConfigurationData, DeviceSummary, Interface
 
 client = TestClient(app)
 
@@ -178,6 +179,35 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
     assert calls == ["vlan:10:True", "interface:lag 1:True", "interface:1/1/1:True"]
 
 
+def test_device_discovery_endpoint(monkeypatch) -> None:
+    class FakeNetBoxClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            pass
+
+        async def list_devices(self, query):
+            assert query == "edge"
+            return [DeviceSummary(name="edge-01", display="edge-01", site="HQ")]
+
+    monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
+    response = client.post(
+        "/api/netbox/devices",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "query": "edge",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == "edge-01"
+
+
 def test_batch_import_runs_independent_actions_concurrently(monkeypatch) -> None:
     active = 0
     max_active = 0
@@ -224,3 +254,69 @@ def test_batch_import_runs_independent_actions_concurrently(monkeypatch) -> None
     assert response.status_code == 200
     assert response.json()["applied"] == 3
     assert max_active == 3
+
+
+def test_change_plan_reports_before_and_after_without_writing(monkeypatch) -> None:
+    class FakeNetBoxClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            pass
+
+        async def get_configuration(self, _device):
+            return ConfigurationData(interfaces=[Interface(name="1/1/1", description="Old")])
+
+    monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
+    response = client.post(
+        "/api/netbox/change-plan",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "device": "edge-01",
+            "actions": [
+                {
+                    "resource": "interface",
+                    "fields": ["description"],
+                    "interface": {"name": "1/1/1", "description": "New"},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["actions"][0]["changes"]["description"] == {
+        "before": "Old",
+        "after": "New",
+    }
+
+
+def test_bulk_compare_summarizes_device_drift(monkeypatch) -> None:
+    class FakeNetBoxClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            pass
+
+        async def get_configuration(self, *_args):
+            return ConfigurationData(interfaces=[Interface(name="1", enabled=False)])
+
+    monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
+    response = client.post(
+        "/api/compare-bulk",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "audits": [{"device": "edge-01", "config": "interface 1\n no shutdown"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["devices_with_drift"] == 1

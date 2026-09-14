@@ -87,3 +87,41 @@ def test_builds_side_by_side_configuration_diff() -> None:
     assert result.summary.unchanged == 2
     assert result.summary.changed == 1
     assert result.summary.rendered_only == 1
+
+
+def test_config_diff_ignores_comments_case_and_cosmetic_whitespace() -> None:
+    result = compare_configs(
+        "! generated\nINTERFACE   1/1/1\n  description Office\n",
+        "# template\ninterface 1/1/1\n description   office\n",
+    )
+
+    assert result.summary.unchanged == 2
+    assert result.summary.changed == 0
+
+
+def test_compares_extended_fields_and_generates_remediation_commands() -> None:
+    result = compare_interfaces(
+        [Interface(name="1/1/1", mtu=1500, speed=1000)],
+        [
+            Interface(
+                name="1/1/1",
+                description="Uplink",
+                mtu=9198,
+                speed=10000,
+                mode=InterfaceMode.ACCESS,
+                untagged_vlan=10,
+            )
+        ],
+    )
+
+    fields = {difference.field for difference in result.interfaces[0].differences}
+    assert {"description", "mode", "untagged vlan", "mtu", "speed"} <= fields
+    assert result.remediation_commands == [
+        "interface 1/1/1",
+        "    no shutdown",
+        "    description Uplink",
+        "    vlan access 10",
+        "    mtu 9198",
+        "    speed 10000",
+        "exit",
+    ]

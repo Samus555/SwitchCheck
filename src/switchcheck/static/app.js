@@ -14,10 +14,31 @@ const submitButton = document.querySelector("#submit-button");
 const resultSearch = document.querySelector("#result-search");
 const applySelectedButton = document.querySelector("#apply-selected");
 const clearSelectionButton = document.querySelector("#clear-selection");
+const previewSelectedButton = document.querySelector("#preview-selected");
+const bulkAuditButton = document.querySelector("#bulk-audit");
 
 let comparisonData = null;
 let activeFilter = "all";
 const selectedChanges = new Map();
+let selectedFiles = [];
+
+const preferenceFields = ["netbox-url", "device", "verify-tls", "ssh-host", "ssh-username"];
+function loadPreferences() {
+  preferenceFields.forEach((id) => {
+    const input = document.querySelector(`#${id}`);
+    const saved = localStorage.getItem(`switchcheck:${id}`);
+    if (saved === null) return;
+    if (input.type === "checkbox") input.checked = saved === "true";
+    else input.value = saved;
+  });
+}
+function savePreferences() {
+  preferenceFields.forEach((id) => {
+    const input = document.querySelector(`#${id}`);
+    localStorage.setItem(`switchcheck:${id}`, input.type === "checkbox" ? input.checked : input.value);
+  });
+}
+loadPreferences();
 
 function showSetupStep(step) {
   document.querySelectorAll("[data-setup-panel]").forEach((panel) => {
@@ -56,10 +77,12 @@ function updateLineCount() {
 
 configInput.addEventListener("input", updateLineCount);
 fileInput.addEventListener("change", async () => {
-  const file = fileInput.files[0];
+  selectedFiles = [...fileInput.files];
+  const file = selectedFiles[0];
   if (!file) return;
   configInput.value = await file.text();
   fileName.textContent = file.name;
+  bulkAuditButton.hidden = selectedFiles.length < 2;
   updateLineCount();
 });
 
@@ -104,6 +127,7 @@ form.addEventListener("submit", async (event) => {
     device: document.querySelector("#device").value,
     verify_tls: document.querySelector("#verify-tls").checked,
   };
+  savePreferences();
 
   try {
     const response = await fetch("/api/compare", {
@@ -131,6 +155,7 @@ form.addEventListener("submit", async (event) => {
     renderResults();
     renderVlans();
     renderConfigDiff();
+    renderRemediation();
     document.querySelector("#interface-tab-count").textContent = String(data.summary.total);
     document.querySelector("#vlan-tab-count").textContent = String(data.vlan_summary.total);
     document.querySelector('[data-setup-step="results"]').disabled = false;
@@ -195,6 +220,40 @@ function updateSelectionToolbar() {
   document.querySelector("#selected-count").textContent = String(count);
   applySelectedButton.disabled = count === 0;
   clearSelectionButton.disabled = count === 0;
+  previewSelectedButton.disabled = count === 0;
+}
+
+function connectionPayload() {
+  return {
+    netbox_url: document.querySelector("#netbox-url").value,
+    token: document.querySelector("#token").value,
+    verify_tls: document.querySelector("#verify-tls").checked,
+  };
+}
+
+async function previewSelectedChanges() {
+  actionMessage.hidden = true;
+  try {
+    const response = await fetch("/api/netbox/change-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...connectionPayload(),
+        device: document.querySelector("#device").value,
+        actions: [...selectedChanges.values()],
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "The change plan could not be generated.");
+    actionMessage.textContent = data.actions
+      .map((item, index) => `${index + 1}. ${item.operation} ${item.resource} ${item.identifier}\n${JSON.stringify(item.changes, null, 2)}`)
+      .join("\n\n");
+    actionMessage.classList.remove("action-error");
+    actionMessage.style.whiteSpace = "pre-wrap";
+    actionMessage.hidden = false;
+  } catch (error) {
+    showActionError(error.message);
+  }
 }
 
 async function importToNetBox(button, resource, source, fields, create) {
@@ -404,6 +463,12 @@ function renderConfigDiff() {
   configDiffBody.replaceChildren(...rows);
 }
 
+function renderRemediation() {
+  const commands = comparisonData.remediation_commands || [];
+  document.querySelector("#remediation-commands").textContent =
+    commands.join("\n") || "No switch-side remediation is required.";
+}
+
 function renderResults() {
   if (!comparisonData) return;
   const query = resultSearch.value.trim().toLowerCase();
@@ -479,7 +544,10 @@ function detailRowFor(item) {
   const td = document.createElement("td");
   td.colSpan = 4;
   const panel = element("div", "detail-panel");
-  const fields = ["enabled", "description", "mode", "untagged_vlan", "tagged_vlans", "lag"];
+  const fields = [
+    "enabled", "description", "mode", "untagged_vlan", "tagged_vlans", "lag",
+    "mtu", "speed", "duplex", "type", "mac_address", "mgmt_only", "custom_fields",
+  ];
   fields.forEach((field) => {
     const detail = element("div", "detail-item");
     detail.append(
@@ -552,6 +620,7 @@ document.querySelector(".result-tabs").addEventListener("keydown", (event) => {
 
 resultSearch.addEventListener("input", renderResults);
 applySelectedButton.addEventListener("click", applySelectedChanges);
+previewSelectedButton.addEventListener("click", previewSelectedChanges);
 clearSelectionButton.addEventListener("click", () => {
   selectedChanges.clear();
   document.querySelectorAll(".selection-control input").forEach((checkbox) => {
@@ -563,4 +632,151 @@ document.querySelector("#new-comparison").addEventListener("click", () => {
   resultsSection.hidden = true;
   showSetupStep("config");
   window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+function showActionError(message) {
+  actionMessage.textContent = message || "The operation failed.";
+  actionMessage.classList.add("action-error");
+  actionMessage.hidden = false;
+}
+
+document.querySelector("#discover-devices").addEventListener("click", async () => {
+  try {
+    const response = await fetch("/api/netbox/devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...connectionPayload(), query: document.querySelector("#device").value }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Device discovery failed.");
+    document.querySelector("#device-options").replaceChildren(
+      ...data.map((device) => {
+        const option = document.createElement("option");
+        option.value = device.name;
+        option.label = [device.site, device.status].filter(Boolean).join(" · ");
+        return option;
+      }),
+    );
+    actionMessage.textContent = `${data.length} NetBox device${data.length === 1 ? "" : "s"} found.`;
+    actionMessage.classList.remove("action-error");
+    actionMessage.hidden = false;
+  } catch (error) {
+    showActionError(error.message);
+  }
+});
+
+document.querySelector("#fetch-config").addEventListener("click", async () => {
+  try {
+    const response = await fetch("/api/config/ssh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        host: document.querySelector("#ssh-host").value,
+        username: document.querySelector("#ssh-username").value,
+        password: document.querySelector("#ssh-password").value || null,
+        private_key: document.querySelector("#ssh-private-key").value || null,
+        known_hosts: document.querySelector("#ssh-known-hosts").value || null,
+        command: document.querySelector("#ssh-command").value,
+        sftp_path: document.querySelector("#sftp-path").value || null,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Configuration retrieval failed.");
+    configInput.value = data.config;
+    fileName.textContent = `${document.querySelector("#ssh-host").value}: running config`;
+    updateLineCount();
+    savePreferences();
+  } catch (error) {
+    showActionError(error.message);
+  }
+});
+
+bulkAuditButton.addEventListener("click", async () => {
+  try {
+    const audits = await Promise.all(
+      selectedFiles.map(async (file) => ({
+        device: file.name.replace(/\.(txt|cfg|conf)$/i, ""),
+        config: await file.text(),
+      })),
+    );
+    const response = await fetch("/api/compare-bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...connectionPayload(), audits }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Bulk audit failed.");
+    comparisonData = {
+      summary: {
+        total: data.total,
+        matches: data.successful - data.devices_with_drift,
+        differences: data.devices_with_drift,
+        only_aruba: 0,
+        only_netbox: data.failed,
+      },
+      vlan_summary: { total: 0, matches: 0, differences: 0, only_aruba: 0, only_netbox: 0 },
+      interfaces: data.results.map((item) => ({
+        name: item.device,
+        status: !item.success ? "only_netbox" : item.comparison.summary.differences ||
+          item.comparison.summary.only_aruba || item.comparison.summary.only_netbox ? "different" : "match",
+        differences: item.error ? [{ field: item.error }] : [],
+      })),
+      vlans: [],
+      config: { available: false, message: "Configuration diff is available in individual audits." },
+      remediation_commands: data.results.flatMap((item) => item.comparison?.remediation_commands || []),
+      bulk: data,
+    };
+    renderSummary(comparisonData.summary);
+    renderSummary(comparisonData.vlan_summary, "#vlan-summary");
+    renderResults();
+    renderVlans();
+    renderConfigDiff();
+    renderRemediation();
+    document.querySelector("#interface-tab-count").textContent = String(data.total);
+    document.querySelector("#vlan-tab-count").textContent = "0";
+    document.querySelector('[data-setup-step="results"]').disabled = false;
+    showResultTab("interfaces");
+    showSetupStep("results");
+    resultsSection.hidden = false;
+    resultsSection.scrollIntoView({ behavior: "smooth" });
+  } catch (error) {
+    showActionError(error.message);
+  }
+});
+
+document.querySelectorAll(".export-report").forEach((button) => {
+  button.addEventListener("click", () => exportReport(button.dataset.format));
+});
+
+function exportReport(format) {
+  if (!comparisonData) return;
+  let content;
+  let type;
+  if (format === "json") {
+    content = JSON.stringify(comparisonData, null, 2);
+    type = "application/json";
+  } else if (format === "csv") {
+    const rows = [["resource", "identifier", "status", "differences"]];
+    comparisonData.interfaces.forEach((item) =>
+      rows.push(["interface", item.name, item.status, item.differences.map((diff) => diff.field).join("; ")]));
+    comparisonData.vlans.forEach((item) =>
+      rows.push(["vlan", item.vid, item.status, item.differences.map((diff) => diff.field).join("; ")]));
+    content = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
+    type = "text/csv";
+  } else {
+    const escape = (value) => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+    const rows = [...comparisonData.interfaces.map((item) => ["Interface", item.name, item.status]),
+      ...comparisonData.vlans.map((item) => ["VLAN", item.vid, item.status])];
+    content = `<!doctype html><title>SwitchCheck report</title><h1>SwitchCheck report</h1><table border="1"><tr><th>Resource</th><th>Name</th><th>Status</th></tr>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escape(cell)}</td>`).join("")}</tr>`).join("")}</table>`;
+    type = "text/html";
+  }
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([content], { type }));
+  link.download = `switchcheck-report.${format}`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+document.querySelector("#copy-remediation").addEventListener("click", async () => {
+  await navigator.clipboard.writeText((comparisonData?.remediation_commands || []).join("\n"));
 });

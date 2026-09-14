@@ -11,6 +11,7 @@ from switchcheck.models import (
     FieldDifference,
     Interface,
     InterfaceComparison,
+    InterfaceMode,
     Vlan,
     VlanComparison,
 )
@@ -22,6 +23,13 @@ INTERFACE_FIELDS = (
     "untagged_vlan",
     "tagged_vlans",
     "lag",
+    "mtu",
+    "speed",
+    "duplex",
+    "type",
+    "mac_address",
+    "mgmt_only",
+    "custom_fields",
 )
 VLAN_FIELDS = ("name", "description")
 
@@ -76,7 +84,8 @@ def compare_interfaces(
                 netbox=getattr(netbox, field),
             )
             for field in INTERFACE_FIELDS
-            if not _interface_values_equal(field, getattr(aruba, field), getattr(netbox, field))
+            if _should_compare_interface_field(field, getattr(aruba, field))
+            and not _interface_values_equal(field, getattr(aruba, field), getattr(netbox, field))
         ]
         comparisons.append(
             InterfaceComparison(
@@ -96,6 +105,7 @@ def compare_interfaces(
         vlan_summary=_summarize(vlan_comparisons),
         vlans=vlan_comparisons,
         config=compare_configs(current_config, rendered_config, rendered_config_error),
+        remediation_commands=generate_aruba_commands(comparisons, vlan_comparisons),
     )
 
 
@@ -142,7 +152,19 @@ def compare_vlans(aruba_vlans: list[Vlan], netbox_vlans: list[Vlan]) -> list[Vla
 def _interface_values_equal(field: str, aruba_value: object, netbox_value: object) -> bool:
     if field == "lag" and isinstance(aruba_value, str) and isinstance(netbox_value, str):
         return normalize_interface_name(aruba_value) == normalize_interface_name(netbox_value)
+    if field == "mac_address" and isinstance(aruba_value, str) and isinstance(netbox_value, str):
+        return re.sub(r"[^0-9a-f]", "", aruba_value.lower()) == re.sub(
+            r"[^0-9a-f]", "", netbox_value.lower()
+        )
     return aruba_value == netbox_value
+
+
+def _should_compare_interface_field(field: str, aruba_value: object) -> bool:
+    if field in {"mtu", "speed", "duplex", "type", "mac_address"}:
+        return aruba_value is not None
+    if field == "custom_fields":
+        return bool(aruba_value)
+    return True
 
 
 def compare_configs(
@@ -161,9 +183,14 @@ def compare_configs(
             lines=[],
         )
 
-    current_lines = current.splitlines()
-    rendered_lines = rendered.splitlines()
-    matcher = SequenceMatcher(None, current_lines, rendered_lines, autojunk=False)
+    current_lines = _significant_config_lines(current)
+    rendered_lines = _significant_config_lines(rendered)
+    matcher = SequenceMatcher(
+        None,
+        [normalized for _, _, normalized in current_lines],
+        [normalized for _, _, normalized in rendered_lines],
+        autojunk=False,
+    )
     lines: list[ConfigDiffLine] = []
 
     for (
@@ -190,10 +217,10 @@ def compare_configs(
             lines.append(
                 ConfigDiffLine(
                     status=status,
-                    current_number=current_start + offset + 1 if has_current else None,
-                    current_text=current_block[offset] if has_current else None,
-                    rendered_number=rendered_start + offset + 1 if has_rendered else None,
-                    rendered_text=rendered_block[offset] if has_rendered else None,
+                    current_number=current_block[offset][0] if has_current else None,
+                    current_text=current_block[offset][1] if has_current else None,
+                    rendered_number=rendered_block[offset][0] if has_rendered else None,
+                    rendered_text=rendered_block[offset][1] if has_rendered else None,
                 )
             )
 
@@ -202,6 +229,67 @@ def compare_configs(
         for status in ("unchanged", "changed", "current_only", "rendered_only")
     }
     return ConfigComparison(summary=ConfigDiffSummary(**counts), lines=lines)
+
+
+def _significant_config_lines(config: str) -> list[tuple[int, str, str]]:
+    """Keep display text and line numbers while normalizing cosmetic differences."""
+    result: list[tuple[int, str, str]] = []
+    for number, text in enumerate(config.splitlines(), 1):
+        stripped = text.strip()
+        if not stripped or stripped.startswith(("!", "#", ";")):
+            continue
+        normalized = re.sub(r"\s+", " ", stripped).lower()
+        result.append((number, text, normalized))
+    return result
+
+
+def generate_aruba_commands(
+    comparisons: list[InterfaceComparison], vlan_comparisons: list[VlanComparison]
+) -> list[str]:
+    """Generate Aruba CX commands which make the switch follow NetBox intent."""
+    commands: list[str] = []
+    for item in comparisons:
+        target = item.netbox
+        if target is None or item.status is CompareStatus.MATCH:
+            continue
+        commands.append(f"interface {target.name}")
+        commands.append("    no shutdown" if target.enabled else "    shutdown")
+        commands.append(
+            f"    description {_cli_value(target.description)}"
+            if target.description
+            else "    no description"
+        )
+        if target.mode is InterfaceMode.ACCESS and target.untagged_vlan is not None:
+            commands.append(f"    vlan access {target.untagged_vlan}")
+        elif target.mode is InterfaceMode.TAGGED:
+            if target.untagged_vlan is not None:
+                commands.append(f"    vlan trunk native {target.untagged_vlan}")
+            if target.tagged_vlans:
+                commands.append(
+                    "    vlan trunk allowed " + ",".join(str(vid) for vid in target.tagged_vlans)
+                )
+        if target.mtu is not None:
+            commands.append(f"    mtu {target.mtu}")
+        if target.speed is not None:
+            commands.append(f"    speed {target.speed}")
+        if target.lag:
+            commands.append(f"    lag {target.lag}")
+        commands.append("exit")
+    for item in vlan_comparisons:
+        target = item.netbox
+        if target is None or item.status is CompareStatus.MATCH:
+            continue
+        commands.append(f"vlan {target.vid}")
+        if target.name:
+            commands.append(f"    name {_cli_value(target.name)}")
+        if target.description:
+            commands.append(f"    description {_cli_value(target.description)}")
+        commands.append("exit")
+    return commands
+
+
+def _cli_value(value: str) -> str:
+    return re.sub(r"[\r\n]+", " ", value).strip()
 
 
 def _summarize(
