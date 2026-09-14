@@ -16,6 +16,7 @@ const applySelectedButton = document.querySelector("#apply-selected");
 const clearSelectionButton = document.querySelector("#clear-selection");
 const previewSelectedButton = document.querySelector("#preview-selected");
 const bulkAuditButton = document.querySelector("#bulk-audit");
+const hero = document.querySelector(".hero");
 
 let comparisonData = null;
 let activeFilter = "all";
@@ -40,6 +41,37 @@ function savePreferences() {
 }
 loadPreferences();
 
+function showSetupStep(step) {
+  document.querySelectorAll("[data-setup-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.setupPanel !== step;
+    panel.classList.toggle("active", panel.dataset.setupPanel === step);
+  });
+  form.hidden = step === "results";
+  hero.hidden = step === "results";
+  document.querySelectorAll("[data-setup-step]").forEach((button) => {
+    const steps = ["config", "connection", "results"];
+    const buttonIndex = steps.indexOf(button.dataset.setupStep);
+    const currentIndex = steps.indexOf(step);
+    button.classList.toggle("active", button.dataset.setupStep === step);
+    button.classList.toggle("complete", buttonIndex < currentIndex);
+    button.toggleAttribute("aria-current", button.dataset.setupStep === step);
+  });
+}
+
+function showResultTab(tabName) {
+  document.querySelectorAll("[data-result-tab]").forEach((tab) => {
+    const active = tab.dataset.resultTab === tabName;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-result-panel]").forEach((panel) => {
+    const active = panel.dataset.resultPanel === tabName;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  });
+}
+
 function updateLineCount() {
   const count = configInput.value ? configInput.value.split("\n").length : 0;
   lineCount.textContent = `${count} ${count === 1 ? "line" : "lines"}`;
@@ -61,6 +93,28 @@ document.querySelector("#toggle-token").addEventListener("click", (event) => {
   const visible = tokenInput.type === "text";
   tokenInput.type = visible ? "password" : "text";
   event.currentTarget.setAttribute("aria-label", visible ? "Show token" : "Hide token");
+});
+
+document.querySelector("#continue-to-connection").addEventListener("click", () => {
+  if (!configInput.reportValidity()) return;
+  showError("");
+  showSetupStep("connection");
+  document.querySelector("#netbox-url").focus();
+});
+
+document.querySelector("#back-to-config").addEventListener("click", () => {
+  showSetupStep("config");
+  configInput.focus();
+});
+
+document.querySelectorAll("[data-setup-step]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    const step = button.dataset.setupStep;
+    if (step === "results" && !comparisonData) return;
+    showSetupStep(step);
+    resultsSection.hidden = step !== "results";
+  });
 });
 
 form.addEventListener("submit", async (event) => {
@@ -104,6 +158,11 @@ form.addEventListener("submit", async (event) => {
     renderVlans();
     renderConfigDiff();
     renderRemediation();
+    document.querySelector("#interface-tab-count").textContent = String(data.summary.total);
+    document.querySelector("#vlan-tab-count").textContent = String(data.vlan_summary.total);
+    document.querySelector('[data-setup-step="results"]').disabled = false;
+    showResultTab("interfaces");
+    showSetupStep("results");
     resultsSection.hidden = false;
     resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
@@ -545,6 +604,22 @@ document.querySelector("#filters").addEventListener("click", (event) => {
   renderResults();
 });
 
+document.querySelector(".result-tabs").addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-result-tab]");
+  if (tab) showResultTab(tab.dataset.resultTab);
+});
+document.querySelector(".result-tabs").addEventListener("keydown", (event) => {
+  if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll("[data-result-tab]")];
+  const currentIndex = tabs.indexOf(document.activeElement);
+  if (currentIndex < 0) return;
+  event.preventDefault();
+  const direction = event.key === "ArrowRight" ? 1 : -1;
+  const nextTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
+  showResultTab(nextTab.dataset.resultTab);
+  nextTab.focus();
+});
+
 resultSearch.addEventListener("input", renderResults);
 applySelectedButton.addEventListener("click", applySelectedChanges);
 previewSelectedButton.addEventListener("click", previewSelectedChanges);
@@ -557,6 +632,7 @@ clearSelectionButton.addEventListener("click", () => {
 });
 document.querySelector("#new-comparison").addEventListener("click", () => {
   resultsSection.hidden = true;
+  showSetupStep("config");
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
@@ -658,6 +734,11 @@ bulkAuditButton.addEventListener("click", async () => {
     renderVlans();
     renderConfigDiff();
     renderRemediation();
+    document.querySelector("#interface-tab-count").textContent = String(data.total);
+    document.querySelector("#vlan-tab-count").textContent = "0";
+    document.querySelector('[data-setup-step="results"]').disabled = false;
+    showResultTab("interfaces");
+    showSetupStep("results");
     resultsSection.hidden = false;
     resultsSection.scrollIntoView({ behavior: "smooth" });
   } catch (error) {
