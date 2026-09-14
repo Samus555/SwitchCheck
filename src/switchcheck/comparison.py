@@ -84,7 +84,8 @@ def compare_interfaces(
                 netbox=getattr(netbox, field),
             )
             for field in INTERFACE_FIELDS
-            if not _interface_values_equal(field, getattr(aruba, field), getattr(netbox, field))
+            if _should_compare_interface_field(field, getattr(aruba, field))
+            and not _interface_values_equal(field, getattr(aruba, field), getattr(netbox, field))
         ]
         comparisons.append(
             InterfaceComparison(
@@ -104,7 +105,7 @@ def compare_interfaces(
         vlan_summary=_summarize(vlan_comparisons),
         vlans=vlan_comparisons,
         config=compare_configs(current_config, rendered_config, rendered_config_error),
-        remediation_commands=generate_aruba_commands(comparisons),
+        remediation_commands=generate_aruba_commands(comparisons, vlan_comparisons),
     )
 
 
@@ -151,7 +152,19 @@ def compare_vlans(aruba_vlans: list[Vlan], netbox_vlans: list[Vlan]) -> list[Vla
 def _interface_values_equal(field: str, aruba_value: object, netbox_value: object) -> bool:
     if field == "lag" and isinstance(aruba_value, str) and isinstance(netbox_value, str):
         return normalize_interface_name(aruba_value) == normalize_interface_name(netbox_value)
+    if field == "mac_address" and isinstance(aruba_value, str) and isinstance(netbox_value, str):
+        return re.sub(r"[^0-9a-f]", "", aruba_value.lower()) == re.sub(
+            r"[^0-9a-f]", "", netbox_value.lower()
+        )
     return aruba_value == netbox_value
+
+
+def _should_compare_interface_field(field: str, aruba_value: object) -> bool:
+    if field in {"mtu", "speed", "duplex", "type", "mac_address"}:
+        return aruba_value is not None
+    if field == "custom_fields":
+        return bool(aruba_value)
+    return True
 
 
 def compare_configs(
@@ -230,7 +243,9 @@ def _significant_config_lines(config: str) -> list[tuple[int, str, str]]:
     return result
 
 
-def generate_aruba_commands(comparisons: list[InterfaceComparison]) -> list[str]:
+def generate_aruba_commands(
+    comparisons: list[InterfaceComparison], vlan_comparisons: list[VlanComparison]
+) -> list[str]:
     """Generate Aruba CX commands which make the switch follow NetBox intent."""
     commands: list[str] = []
     for item in comparisons:
@@ -257,6 +272,16 @@ def generate_aruba_commands(comparisons: list[InterfaceComparison]) -> list[str]
             commands.append(f"    speed {target.speed}")
         if target.lag:
             commands.append(f"    lag {target.lag}")
+        commands.append("exit")
+    for item in vlan_comparisons:
+        target = item.netbox
+        if target is None or item.status is CompareStatus.MATCH:
+            continue
+        commands.append(f"vlan {target.vid}")
+        if target.name:
+            commands.append(f"    name {target.name}")
+        if target.description:
+            commands.append(f"    description {target.description}")
         commands.append("exit")
     return commands
 

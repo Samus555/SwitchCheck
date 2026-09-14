@@ -10,22 +10,22 @@ from fastapi.templating import Jinja2Templates
 from switchcheck.aruba import parse_aruba_configuration
 from switchcheck.comparison import compare_interfaces
 from switchcheck.models import (
-    CompareRequest,
     BulkAuditResult,
     BulkCompareRequest,
     BulkComparisonResult,
     ChangePlanItem,
+    CompareRequest,
     ComparisonResult,
     DeviceDiscoveryRequest,
     DeviceSummary,
     ImportResource,
     NetBoxBatchImportRequest,
     NetBoxBatchImportResult,
+    NetBoxChangePlan,
+    NetBoxChangePlanRequest,
     NetBoxImportAction,
     NetBoxImportRequest,
     NetBoxImportResult,
-    NetBoxChangePlan,
-    NetBoxChangePlanRequest,
     SshConfigRequest,
     SshConfigResult,
 )
@@ -124,9 +124,7 @@ async def compare_bulk(payload: BulkCompareRequest) -> BulkComparisonResult:
             async with NetBoxClient(
                 str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
             ) as client:
-                netbox = await client.get_configuration(
-                    device, {vlan.vid for vlan in aruba.vlans}
-                )
+                netbox = await client.get_configuration(device, {vlan.vid for vlan in aruba.vlans})
             comparison = compare_interfaces(
                 aruba.interfaces,
                 netbox.interfaces,
@@ -140,9 +138,7 @@ async def compare_bulk(payload: BulkCompareRequest) -> BulkComparisonResult:
         except NetBoxError as exc:
             return BulkAuditResult(device=device, success=False, error=str(exc))
 
-    results = await asyncio.gather(
-        *(audit(item.device, item.config) for item in payload.audits)
-    )
+    results = await asyncio.gather(*(audit(item.device, item.config) for item in payload.audits))
     successful = sum(item.success for item in results)
     drift = sum(
         item.success

@@ -154,9 +154,7 @@ def parse_aruba_configuration(config: str) -> ConfigurationData:
             mtu = re.fullmatch(r"mtu\s+(\d+)", line, re.IGNORECASE)
             speed = re.fullmatch(r"speed\s+(\d+)", line, re.IGNORECASE)
             duplex = re.fullmatch(r"duplex\s+(full|half|auto)", line, re.IGNORECASE)
-            mac_address = re.fullmatch(
-                r"(?:mac-address|mac)\s+([0-9a-f:.-]+)", line, re.IGNORECASE
-            )
+            mac_address = re.fullmatch(r"(?:mac-address|mac)\s+([0-9a-f:.-]+)", line, re.IGNORECASE)
             lag = re.fullmatch(r"lag\s+(\S+)(?:\s+mode\s+\S+)?", line, re.IGNORECASE)
             comware_lag = re.fullmatch(
                 r"port\s+link-aggregation\s+group\s+(\d+)",

@@ -13,9 +13,13 @@ async def fetch_configuration(request: SshConfigRequest) -> str:
     if not request.password and not request.private_key:
         raise SshConfigError("Provide an SSH password or private key.")
 
-    client_keys = [request.private_key] if request.private_key else None
-    known_hosts: str | None = request.known_hosts
     try:
+        connection_options: dict[str, object] = {}
+        if request.known_hosts:
+            connection_options["known_hosts"] = asyncssh.import_known_hosts(request.known_hosts)
+        client_keys = (
+            [asyncssh.import_private_key(request.private_key)] if request.private_key else None
+        )
         async with asyncio.timeout(30):
             async with asyncssh.connect(
                 request.host,
@@ -23,7 +27,7 @@ async def fetch_configuration(request: SshConfigRequest) -> str:
                 username=request.username,
                 password=request.password,
                 client_keys=client_keys,
-                known_hosts=known_hosts,
+                **connection_options,
             ) as connection:
                 if request.sftp_path:
                     async with connection.start_sftp_client() as sftp:

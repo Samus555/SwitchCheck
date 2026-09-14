@@ -295,7 +295,8 @@ class NetBoxClient:
             payload["lag"] = lag["id"] if lag else None
         for field in ("mtu", "speed", "duplex", "mac_address", "mgmt_only", "custom_fields"):
             if field in requested:
-                payload[field] = getattr(source, field)
+                value = getattr(source, field)
+                payload[field] = value * 1000 if field == "speed" and value is not None else value
         if "type" in requested and source.type:
             payload["type"] = source.type
 
@@ -404,14 +405,18 @@ class NetBoxClient:
             tagged_vlans=sorted(vlan["vid"] for vlan in tagged if "vid" in vlan),
             lag=lag.get("name") if lag else None,
             mtu=item.get("mtu"),
-            speed=item.get("speed"),
+            speed=item["speed"] // 1000 if item.get("speed") is not None else None,
             duplex=(item.get("duplex") or {}).get("value")
             if isinstance(item.get("duplex"), dict)
             else item.get("duplex"),
             type=(item.get("type") or {}).get("value")
             if isinstance(item.get("type"), dict)
             else item.get("type"),
-            mac_address=item.get("mac_address"),
+            mac_address=(
+                (item.get("primary_mac_address") or {}).get("mac_address")
+                if isinstance(item.get("primary_mac_address"), dict)
+                else item.get("mac_address") or item.get("primary_mac_address")
+            ),
             mgmt_only=bool(item.get("mgmt_only", False)),
             custom_fields=item.get("custom_fields") or {},
         )

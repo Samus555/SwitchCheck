@@ -48,8 +48,8 @@ class CompareStatus(StrEnum):
 
 class FieldDifference(BaseModel):
     field: str
-    aruba: str | int | bool | list[int] | None
-    netbox: str | int | bool | list[int] | None
+    aruba: object
+    netbox: object
 
 
 class InterfaceComparison(BaseModel):

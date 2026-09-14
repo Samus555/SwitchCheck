@@ -601,6 +601,7 @@ document.querySelector("#fetch-config").addEventListener("click", async () => {
         username: document.querySelector("#ssh-username").value,
         password: document.querySelector("#ssh-password").value || null,
         private_key: document.querySelector("#ssh-private-key").value || null,
+        known_hosts: document.querySelector("#ssh-known-hosts").value || null,
         command: document.querySelector("#ssh-command").value,
         sftp_path: document.querySelector("#sftp-path").value || null,
       }),

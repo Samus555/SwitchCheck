@@ -13,8 +13,16 @@ interface intent stored in NetBox. It has no database, user accounts, or server-
 - Highlights line-by-line differences against the configuration rendered by NetBox
 - Adds missing interfaces/VLANs and imports selected Aruba values into NetBox
 - Applies multiple selected NetBox changes in one dependency-aware batch
+- Previews value-level NetBox change plans before applying a batch
 - Reads live interface data from the NetBox REST API
+- Discovers NetBox devices with search and audits up to 20 configuration files at once
+- Retrieves running configurations through SSH commands or SFTP
 - Highlights matches, configuration drift, and interfaces missing on either side
+- Compares MTU, speed, duplex, type, MAC address, management state, and custom fields when present
+- Ignores comments, blank lines, case, and cosmetic whitespace in rendered configuration diffs
+- Generates Aruba CX remediation commands from NetBox intent
+- Exports comparison reports as JSON, CSV, or standalone HTML
+- Remembers non-secret browser preferences such as URL, device, and TLS settings
 - Keeps the configuration and API token in memory only for the duration of a request
 - Includes a responsive, shadcn-inspired web interface
 
@@ -33,6 +41,11 @@ The NetBox token needs read access to devices, interfaces, and VLANs. Write perm
 interfaces and VLANs are required to use the import actions. To enable rendered configuration
 comparison, it also needs the `render_config` action for devices. SwitchCheck accepts NetBox URLs
 with or without the `/api` suffix. TLS certificate verification is enabled by default.
+
+For a bulk audit, select multiple configuration files. Each filename without its `.txt`, `.cfg`,
+or `.conf` extension is used as the NetBox device name. SSH passwords, private keys, and NetBox
+tokens are never written to browser storage. SSH uses standard host-key verification unless a
+trusted known-hosts entry is supplied with the request.
 
 ## Run with Docker
 
