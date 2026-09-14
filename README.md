@@ -45,7 +45,8 @@ with or without the `/api` suffix. TLS certificate verification is enabled by de
 For a bulk audit, select multiple configuration files. Each filename without its `.txt`, `.cfg`,
 or `.conf` extension is used as the NetBox device name. SSH passwords, private keys, and NetBox
 tokens are never written to browser storage. SSH uses standard host-key verification unless a
-trusted known-hosts entry is supplied with the request.
+trusted known-hosts entry is supplied with the request. Switch connections accept either a DNS
+hostname or an IPv4/IPv6 address.
 
 ## Run with Docker
 
