@@ -121,7 +121,7 @@
               </button>
               <p class="privacy-note">
                 <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
-                Data stays in memory for the duration of this request.
+                Tokens, credentials, and configurations are never stored. Non-secret preferences stay in this browser.
               </p>
             </section>
           </div>
@@ -230,7 +230,7 @@
         </section>
       </main>
 
-      <footer>SwitchCheck <span>•</span> No database. No authentication. No retained data.</footer>
+      <footer>SwitchCheck <span>•</span> No database. No server-side sessions or retained audit data.</footer>
     </div>
     <script src="{{ url_for('static', path='/app.js') }}" defer></script>
   </body>
