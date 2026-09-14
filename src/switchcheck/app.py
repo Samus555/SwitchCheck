@@ -300,4 +300,8 @@ def _import_priority(action: NetBoxImportAction) -> int:
         return 2
     if action.resource is ImportResource.VLAN:
         return 3
-    return 4
+    if "mode" in action.fields:
+        return 4
+    if {"untagged_vlan", "tagged_vlans"} & set(action.fields):
+        return 6
+    return 5

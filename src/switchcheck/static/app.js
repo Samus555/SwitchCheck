@@ -418,7 +418,10 @@ function importPriority(action) {
   if (action.create && action.interface) {
     return /^(lag|trk)/.test(action.interface.name.replaceAll(" ", "").toLowerCase()) ? 1 : 2;
   }
-  return action.resource === "vlan" ? 3 : 4;
+  if (action.resource === "vlan") return 3;
+  if (action.fields.includes("mode")) return 4;
+  if (action.fields.some((field) => ["untagged_vlan", "tagged_vlans"].includes(field))) return 6;
+  return 5;
 }
 
 function openApplyProgress(total) {

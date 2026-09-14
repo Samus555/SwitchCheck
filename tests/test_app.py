@@ -179,6 +179,53 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
     assert calls == ["vlan:10:True", "interface:lag 1:True", "interface:1/1/1:True"]
 
 
+def test_batch_import_applies_interface_mode_before_vlan_assignment(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeNetBoxClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            pass
+
+        async def prepare_import(self, _device) -> None:
+            pass
+
+        async def import_interface(self, _device, _source, fields, *, create=False):
+            calls.append(fields[0])
+            return f"Updated {fields[0]}"
+
+    monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
+    response = client.post(
+        "/api/netbox/import-batch",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "device": "access-01",
+            "actions": [
+                {
+                    "resource": "interface",
+                    "fields": ["untagged_vlan"],
+                    "interface": {"name": "1/1/1", "untagged_vlan": 10},
+                },
+                {
+                    "resource": "interface",
+                    "fields": ["mode"],
+                    "interface": {"name": "1/1/1", "mode": "access"},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] == 2
+    assert calls == ["mode", "untagged_vlan"]
+
+
 def test_device_discovery_endpoint(monkeypatch) -> None:
     class FakeNetBoxClient:
         def __init__(self, *_args, **_kwargs) -> None:
