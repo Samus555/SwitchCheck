@@ -27,12 +27,28 @@
           <p>Compare a running Aruba configuration against the source of truth in NetBox.</p>
         </section>
 
+        <nav class="setup-progress" aria-label="Comparison setup">
+          <button class="setup-step active" type="button" data-setup-step="config" aria-current="step">
+            <span>1</span>
+            <span><strong>Configuration</strong><small>Add the running config</small></span>
+          </button>
+          <span class="progress-line" aria-hidden="true"></span>
+          <button class="setup-step" type="button" data-setup-step="connection">
+            <span>2</span>
+            <span><strong>NetBox</strong><small>Connect and compare</small></span>
+          </button>
+          <span class="progress-line" aria-hidden="true"></span>
+          <button class="setup-step" type="button" data-setup-step="results" disabled>
+            <span>3</span>
+            <span><strong>Results</strong><small>Review differences</small></span>
+          </button>
+        </nav>
+
         <form id="compare-form">
-          <div class="workspace-grid">
+          <div class="setup-panel active" data-setup-panel="config">
             <section class="card config-card">
               <div class="card-header">
                 <div>
-                  <span class="step">01</span>
                   <h2>Aruba configuration</h2>
                   <p>Paste a running config or load it from a local file.</p>
                 </div>
@@ -54,12 +70,20 @@
                   placeholder="interface 1/1/1&#10;    description Uplink to core&#10;    vlan trunk native 10&#10;    vlan trunk allowed 20,30&#10;    no shutdown"
                 ></textarea>
               </div>
+              <div class="panel-actions">
+                <span class="panel-hint">Your configuration stays in this browser until you compare.</span>
+                <button id="continue-to-connection" class="button button-primary panel-button" type="button">
+                  Continue to NetBox
+                  <svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                </button>
+              </div>
             </section>
+          </div>
 
+          <div class="setup-panel" data-setup-panel="connection" hidden>
             <section class="card connection-card">
               <div class="card-header">
                 <div>
-                  <span class="step">02</span>
                   <h2>NetBox connection</h2>
                   <p>Credentials are used once and never stored.</p>
                 </div>
@@ -97,10 +121,16 @@
                   <input id="verify-tls" type="checkbox" checked role="switch" />
                 </label>
               </div>
-              <button id="submit-button" class="button button-primary" type="submit">
-                <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
-                <span>Run comparison</span>
-              </button>
+              <div class="panel-actions connection-actions">
+                <button id="back-to-config" class="button button-secondary" type="button">
+                  <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                  Back
+                </button>
+                <button id="submit-button" class="button button-primary panel-button" type="submit">
+                  <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
+                  <span>Run comparison</span>
+                </button>
+              </div>
               <p class="privacy-note">
                 <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
                 Data stays in memory for the duration of this request.
@@ -116,7 +146,7 @@
           <div class="results-heading">
             <div>
               <span class="eyebrow">COMPARISON COMPLETE</span>
-              <h2>Interface results</h2>
+              <h2>Review comparison</h2>
             </div>
             <button id="new-comparison" class="button button-secondary" type="button">New comparison</button>
           </div>
@@ -127,70 +157,87 @@
               <button id="apply-selected" class="button button-primary batch-apply" type="button" disabled>Apply selected</button>
             </div>
           </div>
-          <div id="summary" class="summary-grid"></div>
-          <div class="card results-card">
-            <div class="table-toolbar">
-              <div class="filters" id="filters">
-                <button class="filter active" data-filter="all">All</button>
-                <button class="filter" data-filter="different">Differences</button>
-                <button class="filter" data-filter="match">Matches</button>
-                <button class="filter" data-filter="missing">Missing</button>
-              </div>
-              <div class="search-wrap">
-                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
-                <input id="result-search" type="search" placeholder="Filter interfaces…" />
-              </div>
-            </div>
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr><th>Interface</th><th>Status</th><th>Differences</th><th></th></tr>
-                </thead>
-                <tbody id="result-body"></tbody>
-              </table>
-            </div>
-            <div id="empty-results" class="empty" hidden>No interfaces match this filter.</div>
+
+          <div class="result-tabs" role="tablist" aria-label="Comparison result categories">
+            <button id="interfaces-tab" class="result-tab active" type="button" role="tab" aria-selected="true" aria-controls="interfaces-panel" data-result-tab="interfaces">
+              Interfaces <span id="interface-tab-count">0</span>
+            </button>
+            <button id="vlans-tab" class="result-tab" type="button" role="tab" aria-selected="false" aria-controls="vlans-panel" data-result-tab="vlans">
+              VLANs <span id="vlan-tab-count">0</span>
+            </button>
+            <button id="config-tab" class="result-tab" type="button" role="tab" aria-selected="false" aria-controls="config-panel" data-result-tab="config">
+              Rendered config
+            </button>
           </div>
 
-          <div class="result-section-heading">
-            <div>
-              <span class="eyebrow">VLAN INVENTORY</span>
+          <div id="interfaces-panel" class="result-panel active" role="tabpanel" aria-labelledby="interfaces-tab" data-result-panel="interfaces">
+            <div class="result-panel-heading">
+              <h2>Interface results</h2>
+              <p>Review port settings and choose any values to import into NetBox.</p>
+            </div>
+            <div id="summary" class="summary-grid"></div>
+            <div class="card results-card">
+              <div class="table-toolbar">
+                <div class="filters" id="filters">
+                  <button class="filter active" data-filter="all">All</button>
+                  <button class="filter" data-filter="different">Differences</button>
+                  <button class="filter" data-filter="match">Matches</button>
+                  <button class="filter" data-filter="missing">Missing</button>
+                </div>
+                <div class="search-wrap">
+                  <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+                  <input id="result-search" type="search" placeholder="Filter interfaces…" />
+                </div>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr><th>Interface</th><th>Status</th><th>Differences</th><th></th></tr>
+                  </thead>
+                  <tbody id="result-body"></tbody>
+                </table>
+              </div>
+              <div id="empty-results" class="empty" hidden>No interfaces match this filter.</div>
+            </div>
+          </div>
+
+          <div id="vlans-panel" class="result-panel" role="tabpanel" aria-labelledby="vlans-tab" data-result-panel="vlans" hidden>
+            <div class="result-panel-heading">
               <h2>VLAN results</h2>
               <p>Names and descriptions from the switch and the device’s NetBox site.</p>
             </div>
-          </div>
-          <div id="vlan-summary" class="summary-grid"></div>
-          <div class="card results-card">
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr><th>VLAN ID</th><th>Status</th><th>Aruba</th><th>NetBox</th><th>Differences</th><th></th></tr>
-                </thead>
-                <tbody id="vlan-result-body"></tbody>
-              </table>
+            <div id="vlan-summary" class="summary-grid"></div>
+            <div class="card results-card">
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr><th>VLAN ID</th><th>Status</th><th>Aruba</th><th>NetBox</th><th>Differences</th><th></th></tr>
+                  </thead>
+                  <tbody id="vlan-result-body"></tbody>
+                </table>
+              </div>
+              <div id="empty-vlans" class="empty" hidden>No VLANs were found in either source.</div>
             </div>
-            <div id="empty-vlans" class="empty" hidden>No VLANs were found in either source.</div>
           </div>
 
-          <div class="result-section-heading config-diff-heading">
-            <div>
-              <span class="eyebrow">RENDERED CONFIGURATION</span>
+          <div id="config-panel" class="result-panel" role="tabpanel" aria-labelledby="config-tab" data-result-panel="config" hidden>
+            <div class="result-panel-heading">
               <h2>Running config vs. NetBox render</h2>
               <p>Line-by-line differences against the configuration template rendered by NetBox.</p>
             </div>
-          </div>
-          <div id="config-diff-unavailable" class="alert neutral-alert" hidden></div>
-          <div id="config-diff-content">
-            <div id="config-summary" class="config-summary"></div>
-            <div class="card results-card diff-card">
-              <div class="diff-header">
-                <span>Current Aruba configuration</span>
-                <span>NetBox rendered configuration</span>
-              </div>
-              <div class="table-scroll">
-                <table class="config-diff-table">
-                  <tbody id="config-diff-body"></tbody>
-                </table>
+            <div id="config-diff-unavailable" class="alert neutral-alert" hidden></div>
+            <div id="config-diff-content">
+              <div id="config-summary" class="config-summary"></div>
+              <div class="card results-card diff-card">
+                <div class="diff-header">
+                  <span>Current Aruba configuration</span>
+                  <span>NetBox rendered configuration</span>
+                </div>
+                <div class="table-scroll">
+                  <table class="config-diff-table">
+                    <tbody id="config-diff-body"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
