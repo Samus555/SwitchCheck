@@ -9,16 +9,27 @@ from fastapi.templating import Jinja2Templates
 from switchcheck.aruba import parse_aruba_configuration
 from switchcheck.comparison import compare_interfaces
 from switchcheck.models import (
+    BulkAuditResult,
+    BulkCompareRequest,
+    BulkComparisonResult,
+    ChangePlanItem,
     CompareRequest,
     ComparisonResult,
+    DeviceDiscoveryRequest,
+    DeviceSummary,
     ImportResource,
     NetBoxBatchImportRequest,
     NetBoxBatchImportResult,
+    NetBoxChangePlan,
+    NetBoxChangePlanRequest,
     NetBoxImportAction,
     NetBoxImportRequest,
     NetBoxImportResult,
+    SshConfigRequest,
+    SshConfigResult,
 )
 from switchcheck.netbox import NetBoxClient, NetBoxError
+from switchcheck.ssh import SshConfigError, fetch_configuration
 
 PACKAGE_DIR = Path(__file__).parent
 
@@ -79,6 +90,126 @@ async def compare(payload: CompareRequest) -> ComparisonResult:
         netbox.rendered_config,
         netbox.rendered_config_error,
     )
+
+
+@app.post("/api/netbox/devices", response_model=list[DeviceSummary])
+async def discover_devices(payload: DeviceDiscoveryRequest) -> list[DeviceSummary]:
+    try:
+        async with NetBoxClient(
+            str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
+        ) as client:
+            return await client.list_devices(payload.query)
+    except NetBoxError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/config/ssh", response_model=SshConfigResult)
+async def retrieve_config(payload: SshConfigRequest) -> SshConfigResult:
+    try:
+        return SshConfigResult(config=await fetch_configuration(payload))
+    except SshConfigError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/compare-bulk", response_model=BulkComparisonResult)
+async def compare_bulk(payload: BulkCompareRequest) -> BulkComparisonResult:
+    async def audit(device: str, config: str) -> BulkAuditResult:
+        aruba = parse_aruba_configuration(config)
+        if not aruba.interfaces:
+            return BulkAuditResult(
+                device=device, success=False, error="No supported interfaces were found."
+            )
+        try:
+            async with NetBoxClient(
+                str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
+            ) as client:
+                netbox = await client.get_configuration(device, {vlan.vid for vlan in aruba.vlans})
+            comparison = compare_interfaces(
+                aruba.interfaces,
+                netbox.interfaces,
+                aruba.vlans,
+                netbox.vlans,
+                config,
+                netbox.rendered_config,
+                netbox.rendered_config_error,
+            )
+            return BulkAuditResult(device=device, success=True, comparison=comparison)
+        except NetBoxError as exc:
+            return BulkAuditResult(device=device, success=False, error=str(exc))
+
+    results = await asyncio.gather(*(audit(item.device, item.config) for item in payload.audits))
+    successful = sum(item.success for item in results)
+    drift = sum(
+        item.success
+        and item.comparison is not None
+        and (
+            item.comparison.summary.differences
+            + item.comparison.summary.only_aruba
+            + item.comparison.summary.only_netbox
+            > 0
+        )
+        for item in results
+    )
+    return BulkComparisonResult(
+        total=len(results),
+        successful=successful,
+        failed=len(results) - successful,
+        devices_with_drift=drift,
+        results=results,
+    )
+
+
+@app.post("/api/netbox/change-plan", response_model=NetBoxChangePlan)
+async def plan_netbox_changes(payload: NetBoxChangePlanRequest) -> NetBoxChangePlan:
+    try:
+        async with NetBoxClient(
+            str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
+        ) as client:
+            current = await client.get_configuration(payload.device)
+    except NetBoxError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    plans: list[ChangePlanItem] = []
+    for action in sorted(payload.actions, key=_import_priority):
+        source = action.interface if action.resource is ImportResource.INTERFACE else action.vlan
+        if source is None:
+            raise HTTPException(status_code=422, detail="Change action is missing source data.")
+        identifier = source.name if action.resource is ImportResource.INTERFACE else str(source.vid)
+        existing_items = (
+            current.interfaces if action.resource is ImportResource.INTERFACE else current.vlans
+        )
+        existing = next(
+            (
+                item
+                for item in existing_items
+                if (
+                    getattr(item, "name", "").replace(" ", "").lower()
+                    == identifier.replace(" ", "").lower()
+                    if action.resource is ImportResource.INTERFACE
+                    else getattr(item, "vid", None) == source.vid
+                )
+            ),
+            None,
+        )
+        fields = list(source.model_fields) if action.create else action.fields
+        changes = {
+            field: {
+                "before": getattr(existing, field, None) if existing else None,
+                "after": getattr(source, field, None),
+            }
+            for field in fields
+            if field not in {"name", "vid"} or action.create
+        }
+        plans.append(
+            ChangePlanItem(
+                resource=action.resource,
+                identifier=identifier,
+                operation="create" if action.create else "update",
+                fields=fields,
+                changes=changes,
+            )
+        )
+    return NetBoxChangePlan(actions=plans)
 
 
 @app.post("/api/netbox/import")

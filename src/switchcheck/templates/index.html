@@ -55,7 +55,7 @@
                 <label class="button button-secondary file-button">
                   <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4L8 7M5 14v5h14v-5" /></svg>
                   Choose file
-                  <input id="config-file" type="file" accept=".txt,.cfg,.conf,text/plain" />
+                  <input id="config-file" type="file" multiple accept=".txt,.cfg,.conf,text/plain" />
                 </label>
               </div>
               <div class="editor-wrap">
@@ -70,6 +70,19 @@
                   placeholder="interface 1/1/1&#10;    description Uplink to core&#10;    vlan trunk native 10&#10;    vlan trunk allowed 20,30&#10;    no shutdown"
                 ></textarea>
               </div>
+              <details class="connection-tools">
+                <summary>Retrieve over SSH / SFTP</summary>
+                <div class="fields compact-fields">
+                  <label><span>Switch hostname or IP address</span><input id="ssh-host" placeholder="switch.example.com or 192.0.2.10" /></label>
+                  <label><span>SSH username</span><input id="ssh-username" autocomplete="username" /></label>
+                  <label><span>Password</span><input id="ssh-password" type="password" autocomplete="new-password" /></label>
+                  <label><span>Private key</span><textarea id="ssh-private-key" rows="3" placeholder="Optional PEM private key"></textarea></label>
+                  <label><span>Known hosts</span><textarea id="ssh-known-hosts" rows="3" placeholder="Optional trusted host key entry"></textarea></label>
+                  <label><span>Command</span><input id="ssh-command" value="show running-config" /></label>
+                  <label><span>SFTP path</span><input id="sftp-path" placeholder="Optional: /cfg/running.cfg" /></label>
+                  <button id="fetch-config" class="button button-secondary" type="button">Retrieve configuration</button>
+                </div>
+              </details>
               <div class="panel-actions">
                 <span class="panel-hint">Your configuration stays in this browser until you compare.</span>
                 <button id="continue-to-connection" class="button button-primary panel-button" type="button">
@@ -110,9 +123,11 @@
                   <span>Device name</span>
                   <div class="input-with-icon">
                     <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h.01M7 15h.01M11 9h6M11 15h6" /></svg>
-                    <input id="device" required placeholder="access-sw-01" />
+                    <input id="device" required list="device-options" placeholder="access-sw-01" />
+                    <datalist id="device-options"></datalist>
                   </div>
                 </label>
+                <button id="discover-devices" class="button button-secondary" type="button">Find NetBox devices</button>
                 <label class="switch-row">
                   <span>
                     <strong>Verify TLS certificate</strong>
@@ -126,6 +141,9 @@
                   <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
                   Back
                 </button>
+                <button id="bulk-audit" class="button button-secondary" type="button" hidden>
+                  Audit selected files
+                </button>
                 <button id="submit-button" class="button button-primary panel-button" type="submit">
                   <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
                   <span>Run comparison</span>
@@ -133,7 +151,7 @@
               </div>
               <p class="privacy-note">
                 <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
-                Data stays in memory for the duration of this request.
+                Tokens, credentials, and configurations are never stored. Non-secret preferences stay in this browser.
               </p>
             </section>
           </div>
@@ -148,12 +166,20 @@
               <span class="eyebrow">COMPARISON COMPLETE</span>
               <h2>Review comparison</h2>
             </div>
-            <button id="new-comparison" class="button button-secondary" type="button">New comparison</button>
+            <div class="results-heading-actions">
+              <div class="export-actions">
+                <button class="button button-secondary export-report" data-format="json" type="button">Export JSON</button>
+                <button class="button button-secondary export-report" data-format="csv" type="button">Export CSV</button>
+                <button class="button button-secondary export-report" data-format="html" type="button">Export HTML</button>
+              </div>
+              <button id="new-comparison" class="button button-secondary" type="button">New comparison</button>
+            </div>
           </div>
           <div id="batch-toolbar" class="batch-toolbar">
             <span><strong id="selected-count">0</strong> changes selected</span>
             <div>
               <button id="clear-selection" class="button button-secondary" type="button" disabled>Clear</button>
+              <button id="preview-selected" class="button button-secondary" type="button" disabled>Preview plan</button>
               <button id="apply-selected" class="button button-primary batch-apply" type="button" disabled>Apply selected</button>
             </div>
           </div>
@@ -167,6 +193,9 @@
             </button>
             <button id="config-tab" class="result-tab" type="button" role="tab" aria-selected="false" aria-controls="config-panel" data-result-tab="config">
               Rendered config
+            </button>
+            <button id="remediation-tab" class="result-tab" type="button" role="tab" aria-selected="false" aria-controls="remediation-panel" data-result-tab="remediation">
+              Remediation
             </button>
           </div>
 
@@ -241,10 +270,20 @@
               </div>
             </div>
           </div>
+          <div id="remediation-panel" class="result-panel" role="tabpanel" aria-labelledby="remediation-tab" data-result-panel="remediation" hidden>
+            <div class="result-panel-heading remediation-heading">
+              <div>
+              <h2>NetBox intent as Aruba CX CLI</h2>
+              <p>Review these commands before applying them to a switch.</p>
+              </div>
+              <button id="copy-remediation" class="button button-secondary" type="button">Copy commands</button>
+            </div>
+            <pre id="remediation-commands" class="card remediation-code"></pre>
+          </div>
         </section>
       </main>
 
-      <footer>SwitchCheck <span>•</span> No database. No authentication. No retained data.</footer>
+      <footer>SwitchCheck <span>•</span> No database. No server-side sessions or retained audit data.</footer>
     </div>
     <script src="{{ url_for('static', path='/app.js') }}" defer></script>
   </body>

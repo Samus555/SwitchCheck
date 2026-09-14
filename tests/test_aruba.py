@@ -26,10 +26,28 @@ interface 1/1/2
         "untagged_vlan": 10,
         "tagged_vlans": [20, 30, 31],
         "lag": None,
+        "mtu": None,
+        "speed": None,
+        "duplex": None,
+        "type": None,
+        "mac_address": None,
+        "mgmt_only": False,
+        "custom_fields": {},
     }
     assert interfaces[1].enabled is False
     assert interfaces[1].mode is InterfaceMode.ACCESS
     assert interfaces[1].untagged_vlan == 40
+
+
+def test_parses_extended_interface_properties() -> None:
+    interface = parse_aruba_config(
+        "interface 1/1/1\n mtu 9198\n speed 10000\n duplex full\n management-only"
+    )[0]
+
+    assert interface.mtu == 9198
+    assert interface.speed == 10000
+    assert interface.duplex == "full"
+    assert interface.mgmt_only is True
 
 
 def test_parses_arubaos_switch_vlan_configuration() -> None:
