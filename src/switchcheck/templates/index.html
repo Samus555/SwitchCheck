@@ -284,6 +284,32 @@
             <pre id="remediation-commands" class="card remediation-code"></pre>
           </div>
         </section>
+
+        <dialog id="apply-progress-dialog" class="progress-dialog" aria-labelledby="apply-progress-title">
+          <div class="progress-dialog-content">
+            <div class="progress-dialog-header">
+              <span class="progress-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></svg>
+              </span>
+              <div>
+                <h2 id="apply-progress-title">Applying changes</h2>
+                <p id="apply-progress-summary">Preparing the selected changes…</p>
+              </div>
+            </div>
+            <progress id="apply-progress" max="1" value="0"></progress>
+            <div class="progress-status">
+              <strong id="apply-progress-count">0 of 0 complete</strong>
+              <span id="apply-progress-percent">0%</span>
+            </div>
+            <p id="apply-progress-current" class="progress-current" role="status" aria-live="polite">
+              Connecting to NetBox…
+            </p>
+            <div id="apply-progress-results" class="progress-results" hidden></div>
+            <div class="progress-dialog-actions">
+              <button id="close-apply-progress" class="button button-primary" type="button" hidden>Close</button>
+            </div>
+          </div>
+        </dialog>
       </main>
 
       <footer>SwitchCheck <span>•</span> No database. No server-side sessions or retained audit data.</footer>
