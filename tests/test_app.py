@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import respx
 from fastapi.testclient import TestClient
@@ -133,6 +135,9 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
         async def __aexit__(self, *_args) -> None:
             pass
 
+        async def prepare_import(self, _device) -> None:
+            pass
+
         async def import_vlan(self, _device, source, _fields, *, create=False):
             calls.append(f"vlan:{source.vid}:{create}")
             return f"VLAN {source.vid} added"
@@ -171,3 +176,51 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["applied"] == 3
     assert calls == ["vlan:10:True", "interface:lag 1:True", "interface:1/1/1:True"]
+
+
+def test_batch_import_runs_independent_actions_concurrently(monkeypatch) -> None:
+    active = 0
+    max_active = 0
+
+    class FakeNetBoxClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            pass
+
+        async def prepare_import(self, _device) -> None:
+            pass
+
+        async def import_interface(self, _device, source, _fields, *, create=False):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return f"Interface {source.name} updated"
+
+    monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
+    response = client.post(
+        "/api/netbox/import-batch",
+        json={
+            "netbox_url": "https://netbox.example",
+            "token": "secret",
+            "device": "access-01",
+            "actions": [
+                {
+                    "resource": "interface",
+                    "fields": ["description"],
+                    "interface": {"name": f"1/1/{port}", "description": "Updated"},
+                }
+                for port in range(1, 4)
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] == 3
+    assert max_active == 3

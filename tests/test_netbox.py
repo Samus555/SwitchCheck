@@ -174,6 +174,48 @@ async def test_imports_selected_interface_field() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_reuses_preloaded_data_across_batch_imports() -> None:
+    device_route = respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    interface_route = respx.get("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "next": None,
+                "results": [
+                    {"id": 8, "name": "1/1/1"},
+                    {"id": 9, "name": "1/1/2"},
+                ],
+            },
+        )
+    )
+    vlan_route = respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+    respx.patch("https://netbox.example/api/dcim/interfaces/8/").mock(
+        return_value=httpx.Response(200, json={"id": 8})
+    )
+    respx.patch("https://netbox.example/api/dcim/interfaces/9/").mock(
+        return_value=httpx.Response(200, json={"id": 9})
+    )
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        await client.prepare_import("access-01")
+        await client.import_interface(
+            "access-01", Interface(name="1/1/1", description="First"), ["description"]
+        )
+        await client.import_interface(
+            "access-01", Interface(name="1/1/2", description="Second"), ["description"]
+        )
+
+    assert device_route.call_count == 1
+    assert interface_route.call_count == 1
+    assert vlan_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_adds_missing_vlan() -> None:
     respx.get("https://netbox.example/api/dcim/devices/").mock(
         return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
