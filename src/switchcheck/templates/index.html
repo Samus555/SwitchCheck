@@ -6,6 +6,12 @@
     <meta name="description" content="Compare Aruba switch configurations with NetBox." />
     <title>SwitchCheck</title>
     <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}" />
   </head>
   <body>
@@ -15,18 +21,15 @@
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3m3 3-3 3M17 17H6l3 3m-3-3 3-3" /></svg>
           </span>
-          <span>SwitchCheck</span>
+          <span>SWITCH<span class="brand-accent">CHECK</span></span>
         </a>
-        <span class="stateless"><span class="status-dot"></span> Stateless</span>
+        <div class="system-status" aria-label="System status">
+          <span>SYS://AUDIT_NODE</span>
+          <span class="stateless"><span class="status-dot"></span> ONLINE / STATELESS</span>
+        </div>
       </header>
 
       <main>
-        <section class="hero">
-          <span class="eyebrow">CONFIGURATION AUDIT</span>
-          <h1>Switch intent, verified.</h1>
-          <p>Compare a running Aruba configuration against the source of truth in NetBox.</p>
-        </section>
-
         <nav class="setup-progress" aria-label="Comparison setup">
           <button class="setup-step active" type="button" data-setup-step="config" aria-current="step">
             <span>1</span>

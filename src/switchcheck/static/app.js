@@ -16,7 +16,6 @@ const applySelectedButton = document.querySelector("#apply-selected");
 const clearSelectionButton = document.querySelector("#clear-selection");
 const previewSelectedButton = document.querySelector("#preview-selected");
 const bulkAuditButton = document.querySelector("#bulk-audit");
-const hero = document.querySelector(".hero");
 
 let comparisonData = null;
 let activeFilter = "all";
@@ -47,7 +46,6 @@ function showSetupStep(step) {
     panel.classList.toggle("active", panel.dataset.setupPanel === step);
   });
   form.hidden = step === "results";
-  hero.hidden = step === "results";
   document.querySelectorAll("[data-setup-step]").forEach((button) => {
     const steps = ["config", "connection", "results"];
     const buttonIndex = steps.indexOf(button.dataset.setupStep);
