@@ -285,7 +285,7 @@ def generate_aruba_commands(
             continue
         commands.append(f"vlan {target.vid}")
         if target.name:
-            commands.append(f"    name {_cli_value(target.name)}")
+            commands.append(f"    name {_name_cli_value(target.name)}")
         if target.description:
             commands.append(f"    description {_description_cli_value(target.description)}")
         commands.append("exit")
@@ -366,9 +366,11 @@ def generate_aruba_remediation(
                 )
             )
         if item.status is CompareStatus.ONLY_NETBOX or "name" in changed:
-            name_command = f"    name {_cli_value(target.name)}" if target.name else "    no name"
+            name_command = (
+                f"    name {_name_cli_value(target.name)}" if target.name else "    no name"
+            )
             legacy_name_command = (
-                f'    name "{_aos_cli_value(target.name)}"' if target.name else "    no name"
+                f"    name {_name_cli_value(target.name)}" if target.name else "    no name"
             )
             blocks.append(
                 _vlan_block(
@@ -507,6 +509,14 @@ def _cli_value(value: str) -> str:
 
 
 def _description_cli_value(value: str) -> str:
+    return _quote_cli_value_when_needed(value)
+
+
+def _name_cli_value(value: str) -> str:
+    return _quote_cli_value_when_needed(value)
+
+
+def _quote_cli_value_when_needed(value: str) -> str:
     cleaned = _cli_value(value)
     if re.search(r"\s", cleaned):
         escaped = cleaned.replace('"', '\\"')

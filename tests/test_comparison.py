@@ -152,7 +152,7 @@ def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
         [Vlan(vid=10, name="Old")],
         [
             Vlan(vid=10, name="Users", description="Employee access"),
-            Vlan(vid=30, name="Native"),
+            Vlan(vid=30, name="Native VLAN"),
         ],
     )
 
@@ -213,7 +213,26 @@ def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
         '    description "Employee access"',
         "exit",
     ]
+    vlan_names = {
+        block.identifier: block
+        for block in blocks
+        if block.resource == "vlan" and block.category == "names"
+    }
+    assert vlan_names["10"].aruba_cx == ["vlan 10", "    name Users", "exit"]
+    assert vlan_names["10"].arubaos_switch == ["vlan 10", "    name Users", "exit"]
+    assert vlan_names["30"].aruba_cx == [
+        "vlan 30",
+        '    name "Native VLAN"',
+        "exit",
+    ]
+    assert vlan_names["30"].arubaos_switch == [
+        "vlan 30",
+        '    name "Native VLAN"',
+        "exit",
+    ]
     assert '    description "New uplink"' in result.remediation_commands
+    assert "    name Users" in result.remediation_commands
+    assert '    name "Native VLAN"' in result.remediation_commands
     assert all(
         block.resource == "vlan"
         for block in blocks
