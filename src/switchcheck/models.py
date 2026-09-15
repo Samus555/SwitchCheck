@@ -98,6 +98,13 @@ class ComparisonSummary(BaseModel):
     only_netbox: int
 
 
+class RemediationBlock(BaseModel):
+    category: str
+    identifier: str
+    aruba_cx: list[str] = Field(default_factory=list)
+    arubaos_switch: list[str] = Field(default_factory=list)
+
+
 class ComparisonResult(BaseModel):
     summary: ComparisonSummary
     interfaces: list[InterfaceComparison]
@@ -105,6 +112,7 @@ class ComparisonResult(BaseModel):
     vlans: list[VlanComparison]
     config: ConfigComparison
     remediation_commands: list[str] = Field(default_factory=list)
+    remediation: list[RemediationBlock] = Field(default_factory=list)
 
 
 class CompareRequest(BaseModel):

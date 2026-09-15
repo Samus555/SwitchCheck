@@ -125,3 +125,69 @@ def test_compares_extended_fields_and_generates_remediation_commands() -> None:
         "    speed 10000",
         "exit",
     ]
+
+
+def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
+    result = compare_interfaces(
+        [
+            Interface(
+                name="A1",
+                description="Old uplink",
+                mode=InterfaceMode.TAGGED,
+                untagged_vlan=10,
+                tagged_vlans=[20],
+            )
+        ],
+        [
+            Interface(
+                name="A1",
+                enabled=False,
+                description="New uplink",
+                mode=InterfaceMode.TAGGED,
+                untagged_vlan=30,
+                tagged_vlans=[40],
+                lag="Trk1",
+            )
+        ],
+        [Vlan(vid=10, name="Old")],
+        [Vlan(vid=10, name="Users"), Vlan(vid=30, name="Native")],
+    )
+
+    blocks = result.remediation
+    assert {
+        "interfaces",
+        "descriptions",
+        "untagged_vlans",
+        "tagged_vlans",
+        "lags",
+        "vlans",
+        "names",
+    } <= {block.category for block in blocks}
+
+    untagged = next(block for block in blocks if block.category == "untagged_vlans")
+    assert untagged.aruba_cx == [
+        "interface A1",
+        "    vlan trunk native 30",
+        "exit",
+    ]
+    assert untagged.arubaos_switch == [
+        "vlan 10",
+        "    no untagged A1",
+        "exit",
+        "vlan 30",
+        "    untagged A1",
+        "exit",
+    ]
+
+    tagged = next(block for block in blocks if block.category == "tagged_vlans")
+    assert tagged.arubaos_switch == [
+        "vlan 20",
+        "    no tagged A1",
+        "exit",
+        "vlan 40",
+        "    tagged A1",
+        "exit",
+    ]
+    lag = next(block for block in blocks if block.category == "lags")
+    assert lag.aruba_cx == ["interface A1", "    lag 1", "exit"]
+    assert lag.arubaos_switch == ["trunk A1 Trk1 lacp"]

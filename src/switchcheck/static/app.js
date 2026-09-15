@@ -24,6 +24,9 @@ const applyProgressPercent = document.querySelector("#apply-progress-percent");
 const applyProgressCurrent = document.querySelector("#apply-progress-current");
 const applyProgressResults = document.querySelector("#apply-progress-results");
 const closeApplyProgressButton = document.querySelector("#close-apply-progress");
+const remediationPlatform = document.querySelector("#remediation-platform");
+const remediationFilters = document.querySelector("#remediation-filters");
+const remediationCommands = document.querySelector("#remediation-commands");
 
 let comparisonData = null;
 let activeFilter = "all";
@@ -585,9 +588,27 @@ function renderConfigDiff() {
 }
 
 function renderRemediation() {
-  const commands = comparisonData.remediation_commands || [];
-  document.querySelector("#remediation-commands").textContent =
-    commands.join("\n") || "No switch-side remediation is required.";
+  const platform = remediationPlatform.value;
+  const selectedCategories = new Set(
+    [...remediationFilters.querySelectorAll('input[type="checkbox"]:checked')]
+      .map((input) => input.value),
+  );
+  const blocks = comparisonData.remediation || [];
+  const commandGroups = blocks
+    .filter((block) => selectedCategories.has(block.category))
+    .map((block) => block[platform] || [])
+    .filter((commands) => commands.length);
+  const commands = commandGroups.flatMap((group, index) =>
+    index < commandGroups.length - 1 ? [...group, ""] : group,
+  );
+
+  if (!blocks.length && platform === "aruba_cx") {
+    commands.push(...(comparisonData.remediation_commands || []));
+  }
+  document.querySelector("#remediation-title").textContent =
+    `NetBox intent as ${platform === "aruba_cx" ? "Aruba CX" : "ArubaOS-Switch"} CLI`;
+  remediationCommands.textContent =
+    commands.join("\n") || "No remediation commands match the selected filters.";
 }
 
 function renderResults() {
@@ -901,6 +922,12 @@ function exportReport(format) {
   URL.revokeObjectURL(link.href);
 }
 
+remediationPlatform.addEventListener("change", renderRemediation);
+remediationFilters.addEventListener("change", renderRemediation);
 document.querySelector("#copy-remediation").addEventListener("click", async () => {
-  await navigator.clipboard.writeText((comparisonData?.remediation_commands || []).join("\n"));
+  const noCommandsMessage = "No remediation commands match the selected filters.";
+  const content = remediationCommands.textContent === noCommandsMessage
+    ? ""
+    : remediationCommands.textContent;
+  await navigator.clipboard.writeText(content);
 });

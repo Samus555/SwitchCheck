@@ -276,10 +276,29 @@
           <div id="remediation-panel" class="result-panel" role="tabpanel" aria-labelledby="remediation-tab" data-result-panel="remediation" hidden>
             <div class="result-panel-heading remediation-heading">
               <div>
-              <h2>NetBox intent as Aruba CX CLI</h2>
-              <p>Review these commands before applying them to a switch.</p>
+                <h2 id="remediation-title">NetBox intent as Aruba CX CLI</h2>
+                <p>Choose the switch family and only the settings you want to update.</p>
               </div>
               <button id="copy-remediation" class="button button-secondary" type="button">Copy commands</button>
+            </div>
+            <div class="card remediation-controls">
+              <label>
+                <span>Switch family</span>
+                <select id="remediation-platform">
+                  <option value="aruba_cx">Aruba CX</option>
+                  <option value="arubaos_switch">ArubaOS-Switch (legacy)</option>
+                </select>
+              </label>
+              <fieldset id="remediation-filters">
+                <legend>Include updates</legend>
+                <label><input type="checkbox" value="vlans" checked /> VLANs</label>
+                <label><input type="checkbox" value="interfaces" checked /> Interfaces</label>
+                <label><input type="checkbox" value="names" checked /> Names</label>
+                <label><input type="checkbox" value="descriptions" checked /> Descriptions</label>
+                <label><input type="checkbox" value="untagged_vlans" checked /> VLANs untagged</label>
+                <label><input type="checkbox" value="tagged_vlans" checked /> VLANs tagged</label>
+                <label><input type="checkbox" value="lags" checked /> LAGs</label>
+              </fieldset>
             </div>
             <pre id="remediation-commands" class="card remediation-code"></pre>
           </div>

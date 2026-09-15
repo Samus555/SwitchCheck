@@ -12,6 +12,7 @@ from switchcheck.models import (
     Interface,
     InterfaceComparison,
     InterfaceMode,
+    RemediationBlock,
     Vlan,
     VlanComparison,
 )
@@ -99,6 +100,7 @@ def compare_interfaces(
 
     vlan_comparisons = compare_vlans(aruba_vlans or [], netbox_vlans or [])
 
+    remediation = generate_aruba_remediation(comparisons, vlan_comparisons)
     return ComparisonResult(
         summary=_summarize(comparisons),
         interfaces=comparisons,
@@ -106,6 +108,7 @@ def compare_interfaces(
         vlans=vlan_comparisons,
         config=compare_configs(current_config, rendered_config, rendered_config_error),
         remediation_commands=generate_aruba_commands(comparisons, vlan_comparisons),
+        remediation=remediation,
     )
 
 
@@ -273,7 +276,8 @@ def generate_aruba_commands(
         if target.speed is not None:
             commands.append(f"    speed {target.speed}")
         if target.lag:
-            commands.append(f"    lag {target.lag}")
+            lag_id = re.sub(r"^(?:lag|trk)\s*", "", target.lag, flags=re.IGNORECASE)
+            commands.append(f"    lag {lag_id}")
         commands.append("exit")
     for item in vlan_comparisons:
         target = item.netbox
@@ -288,8 +292,228 @@ def generate_aruba_commands(
     return commands
 
 
+def generate_aruba_remediation(
+    comparisons: list[InterfaceComparison], vlan_comparisons: list[VlanComparison]
+) -> list[RemediationBlock]:
+    """Generate categorized commands for current and legacy Aruba switch families."""
+    blocks: list[RemediationBlock] = []
+    for item in comparisons:
+        target = item.netbox
+        if target is None or item.status is CompareStatus.MATCH:
+            continue
+        current = item.aruba
+        changed = _changed_fields(item)
+        all_fields = item.status is CompareStatus.ONLY_NETBOX
+
+        interface_commands = [
+            "    no shutdown" if target.enabled else "    shutdown"
+        ]
+        legacy_interface_commands = ["    enable" if target.enabled else "    disable"]
+        if all_fields or "mtu" in changed:
+            if target.mtu is not None:
+                interface_commands.append(f"    mtu {target.mtu}")
+        if all_fields or "speed" in changed:
+            if target.speed is not None:
+                interface_commands.append(f"    speed {target.speed}")
+        if all_fields or {"enabled", "mtu", "speed"} & changed:
+            blocks.append(
+                _interface_block(
+                    "interfaces",
+                    target.name,
+                    interface_commands,
+                    legacy_interface_commands,
+                )
+            )
+
+        if all_fields or "description" in changed:
+            cx_description = (
+                f"    description {_cli_value(target.description)}"
+                if target.description
+                else "    no description"
+            )
+            aos_description = (
+                f'    name "{_aos_cli_value(target.description)}"'
+                if target.description
+                else "    no name"
+            )
+            blocks.append(
+                _interface_block(
+                    "descriptions",
+                    target.name,
+                    [cx_description],
+                    [aos_description],
+                )
+            )
+
+        if all_fields or {"mode", "untagged_vlan"} & changed:
+            blocks.append(_untagged_vlan_block(target, current))
+
+        if all_fields or {"mode", "tagged_vlans"} & changed:
+            blocks.append(_tagged_vlan_block(target, current))
+
+        if all_fields or "lag" in changed:
+            blocks.append(_lag_block(target))
+
+    for item in vlan_comparisons:
+        target = item.netbox
+        if target is None or item.status is CompareStatus.MATCH:
+            continue
+        changed = _changed_fields(item)
+        if item.status is CompareStatus.ONLY_NETBOX:
+            blocks.append(
+                RemediationBlock(
+                    category="vlans",
+                    identifier=str(target.vid),
+                    aruba_cx=[f"vlan {target.vid}", "exit"],
+                    arubaos_switch=[f"vlan {target.vid}", "exit"],
+                )
+            )
+        if item.status is CompareStatus.ONLY_NETBOX or "name" in changed:
+            name_command = (
+                f"    name {_cli_value(target.name)}" if target.name else "    no name"
+            )
+            legacy_name_command = (
+                f'    name "{_aos_cli_value(target.name)}"' if target.name else "    no name"
+            )
+            blocks.append(
+                _vlan_block(
+                    "names",
+                    target.vid,
+                    [name_command],
+                    [legacy_name_command],
+                )
+            )
+        if item.status is CompareStatus.ONLY_NETBOX or "description" in changed:
+            description_command = (
+                f"    description {_cli_value(target.description)}"
+                if target.description
+                else "    no description"
+            )
+            blocks.append(
+                _vlan_block("descriptions", target.vid, [description_command], [])
+            )
+    return blocks
+
+
+def _changed_fields(item: InterfaceComparison | VlanComparison) -> set[str]:
+    return {difference.field.replace(" ", "_") for difference in item.differences}
+
+
+def _interface_block(
+    category: str,
+    name: str,
+    cx_commands: list[str],
+    arubaos_commands: list[str],
+) -> RemediationBlock:
+    return RemediationBlock(
+        category=category,
+        identifier=name,
+        aruba_cx=[f"interface {name}", *cx_commands, "exit"] if cx_commands else [],
+        arubaos_switch=(
+            [f"interface {name}", *arubaos_commands, "exit"] if arubaos_commands else []
+        ),
+    )
+
+
+def _vlan_block(
+    category: str,
+    vid: int,
+    cx_commands: list[str],
+    arubaos_commands: list[str],
+) -> RemediationBlock:
+    return RemediationBlock(
+        category=category,
+        identifier=str(vid),
+        aruba_cx=[f"vlan {vid}", *cx_commands, "exit"] if cx_commands else [],
+        arubaos_switch=(
+            [f"vlan {vid}", *arubaos_commands, "exit"] if arubaos_commands else []
+        ),
+    )
+
+
+def _untagged_vlan_block(target: Interface, current: Interface | None) -> RemediationBlock:
+    cx_commands: list[str] = []
+    if target.untagged_vlan is None:
+        if current and current.mode is InterfaceMode.ACCESS:
+            cx_commands.append("    no vlan access")
+        elif current and current.untagged_vlan is not None:
+            cx_commands.append("    no vlan trunk native")
+    elif target.mode is InterfaceMode.ACCESS:
+        cx_commands.append(f"    vlan access {target.untagged_vlan}")
+    else:
+        cx_commands.append(f"    vlan trunk native {target.untagged_vlan}")
+
+    legacy_commands: list[str] = []
+    if current and current.untagged_vlan is not None:
+        legacy_commands.extend(
+            [
+                f"vlan {current.untagged_vlan}",
+                f"    no untagged {target.name}",
+                "exit",
+            ]
+        )
+    if target.untagged_vlan is not None:
+        legacy_commands.extend(
+            [
+                f"vlan {target.untagged_vlan}",
+                f"    untagged {target.name}",
+                "exit",
+            ]
+        )
+    return RemediationBlock(
+        category="untagged_vlans",
+        identifier=target.name,
+        aruba_cx=(
+            [f"interface {target.name}", *cx_commands, "exit"] if cx_commands else []
+        ),
+        arubaos_switch=legacy_commands,
+    )
+
+
+def _tagged_vlan_block(target: Interface, current: Interface | None) -> RemediationBlock:
+    cx_command = (
+        "    vlan trunk allowed " + ",".join(str(vid) for vid in target.tagged_vlans)
+        if target.tagged_vlans
+        else "    no vlan trunk allowed"
+    )
+    legacy_commands: list[str] = []
+    current_vlans = set(current.tagged_vlans if current else [])
+    target_vlans = set(target.tagged_vlans)
+    for vid in sorted(current_vlans - target_vlans):
+        legacy_commands.extend([f"vlan {vid}", f"    no tagged {target.name}", "exit"])
+    for vid in sorted(target_vlans - current_vlans):
+        legacy_commands.extend([f"vlan {vid}", f"    tagged {target.name}", "exit"])
+    return RemediationBlock(
+        category="tagged_vlans",
+        identifier=target.name,
+        aruba_cx=[f"interface {target.name}", cx_command, "exit"],
+        arubaos_switch=legacy_commands,
+    )
+
+
+def _lag_block(target: Interface) -> RemediationBlock:
+    if target.lag:
+        cx_lag = re.sub(r"^(?:lag|trk)\s*", "", target.lag, flags=re.IGNORECASE)
+        legacy_lag = re.sub(r"^lag\s*", "Trk", target.lag, flags=re.IGNORECASE)
+        cx_commands = [f"interface {target.name}", f"    lag {cx_lag}", "exit"]
+        legacy_commands = [f"trunk {target.name} {legacy_lag} lacp"]
+    else:
+        cx_commands = [f"interface {target.name}", "    no lag", "exit"]
+        legacy_commands = [f"no trunk {target.name}"]
+    return RemediationBlock(
+        category="lags",
+        identifier=target.name,
+        aruba_cx=cx_commands,
+        arubaos_switch=legacy_commands,
+    )
+
+
 def _cli_value(value: str) -> str:
     return re.sub(r"[\r\n]+", " ", value).strip()
+
+
+def _aos_cli_value(value: str) -> str:
+    return _cli_value(value).replace('"', "'")
 
 
 def _summarize(

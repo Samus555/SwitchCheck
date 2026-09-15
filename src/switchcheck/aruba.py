@@ -36,7 +36,7 @@ def _expand_number_list(value: str) -> list[int]:
 
 
 def _expand_interfaces(value: str) -> list[str]:
-    """Expand simple Aruba port lists while preserving CX-style names."""
+    """Expand numeric and legacy lettered Aruba port lists."""
     result: list[str] = []
     for part in re.split(r",\s*", value.strip()):
         part = part.strip()
@@ -52,6 +52,19 @@ def _expand_interfaces(value: str) -> list[str]:
                 for port in range(int(match.group(2)), int(match.group(3)) + 1)
             )
             continue
+
+        range_match = re.fullmatch(r"(.+?)(\d+)-(.+?)(\d+)", part)
+        if range_match:
+            left_prefix, start, right_prefix, end = range_match.groups()
+            if (
+                left_prefix == right_prefix
+                or left_prefix.endswith(right_prefix)
+                or right_prefix.endswith(left_prefix)
+            ):
+                result.extend(
+                    f"{left_prefix}{port}" for port in range(int(start), int(end) + 1)
+                )
+                continue
         if part:
             result.append(part)
     return result
