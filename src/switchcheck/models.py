@@ -196,7 +196,7 @@ class NetBoxBatchImportRequest(BaseModel):
     token: str = Field(min_length=1)
     device: str = Field(min_length=1)
     verify_tls: bool = True
-    actions: list[NetBoxImportAction] = Field(min_length=1, max_length=100)
+    actions: list[NetBoxImportAction] = Field(min_length=1, max_length=200)
 
 
 class NetBoxImportResult(BaseModel):

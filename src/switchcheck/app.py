@@ -236,17 +236,9 @@ async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBat
         except NetBoxError as exc:
             results = [NetBoxImportResult(success=False, message=str(exc)) for _action in actions]
         else:
-            semaphore = asyncio.Semaphore(8)
             for priority in sorted({_import_priority(action) for action in actions}):
                 group = [action for action in actions if _import_priority(action) == priority]
-                results.extend(
-                    await asyncio.gather(
-                        *(
-                            _execute_import_safely(client, payload.device, action, semaphore)
-                            for action in group
-                        )
-                    )
-                )
+                results.extend(await client.import_many(payload.device, group))
 
     applied = sum(result.success for result in results)
     return NetBoxBatchImportResult(
@@ -254,21 +246,6 @@ async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBat
         failed=len(results) - applied,
         results=results,
     )
-
-
-async def _execute_import_safely(
-    client: NetBoxClient,
-    device: str,
-    action: NetBoxImportAction,
-    semaphore: asyncio.Semaphore,
-) -> NetBoxImportResult:
-    async with semaphore:
-        try:
-            message = await _execute_import(client, device, action)
-            return NetBoxImportResult(success=True, message=message)
-        except NetBoxError as exc:
-            return NetBoxImportResult(success=False, message=str(exc))
-
 
 async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImportAction) -> str:
     if action.resource is ImportResource.INTERFACE:

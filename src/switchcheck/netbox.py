@@ -1,15 +1,44 @@
 import asyncio
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
 
-from switchcheck.models import ConfigurationData, DeviceSummary, Interface, InterfaceMode, Vlan
+from switchcheck.models import (
+    ConfigurationData,
+    DeviceSummary,
+    ImportResource,
+    Interface,
+    InterfaceMode,
+    NetBoxImportAction,
+    NetBoxImportResult,
+    Vlan,
+)
 
 
 class NetBoxError(RuntimeError):
     """A safe, user-facing NetBox communication error."""
+
+
+class _BulkWriteRejected(NetBoxError):
+    """A bulk payload was rejected without being applied."""
+
+
+@dataclass
+class _PreparedWrite:
+    method: str
+    collection_path: str
+    item_path: str
+    payload: dict[str, Any]
+    message: str
+    cache: list[dict[str, Any]] | None = None
+    cache_record: dict[str, Any] | None = None
+
+    def record_success(self, response: dict[str, Any]) -> None:
+        if self.cache is not None and self.cache_record is not None:
+            self.cache.append({"id": response.get("id"), **self.cache_record})
 
 
 class NetBoxClient:
@@ -111,6 +140,38 @@ class NetBoxClient:
             raise NetBoxError(f"NetBox rejected the update (HTTP {status}).") from exc
         except (httpx.RequestError, ValueError) as exc:
             raise NetBoxError("Could not send the update to NetBox.") from exc
+
+    async def _write_bulk(
+        self, method: str, path: str, payload: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        try:
+            response = await self.client.request(
+                method,
+                urljoin(self.base_url, path),
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, list):
+                raise ValueError("NetBox returned a non-list bulk response.")
+            return data
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                raise NetBoxError(
+                    "The API token does not have permission to modify NetBox."
+                ) from exc
+            detail = self._error_detail(exc.response)
+            message = (
+                f"NetBox rejected the bulk update: {detail}"
+                if detail
+                else f"NetBox rejected the bulk update (HTTP {status})."
+            )
+            if status in {400, 405}:
+                raise _BulkWriteRejected(message) from exc
+            raise NetBoxError(message) from exc
+        except (httpx.RequestError, ValueError) as exc:
+            raise NetBoxError("Could not send the bulk update to NetBox.") from exc
 
     async def _find_device(self, device_name: str) -> dict[str, Any]:
         cached = self._devices_by_name.get(device_name)
@@ -247,6 +308,21 @@ class NetBoxClient:
         *,
         create: bool = False,
     ) -> str:
+        prepared = await self._prepare_interface_import(
+            device_name, source, fields, create=create
+        )
+        response = await self._write(prepared.method, prepared.item_path, prepared.payload)
+        prepared.record_success(response)
+        return prepared.message
+
+    async def _prepare_interface_import(
+        self,
+        device_name: str,
+        source: Interface,
+        fields: list[str],
+        *,
+        create: bool = False,
+    ) -> _PreparedWrite:
         allowed = {
             "enabled",
             "description",
@@ -350,14 +426,24 @@ class NetBoxClient:
                     "type": "lag" if normalized_name.startswith(("lag", "trk")) else "other",
                 }
             )
-            created = await self._write("POST", "dcim/interfaces/", payload)
-            self._interfaces_by_device[target_device["id"]].append(
-                {"id": created.get("id"), "name": source.name}
+            return _PreparedWrite(
+                method="POST",
+                collection_path="dcim/interfaces/",
+                item_path="dcim/interfaces/",
+                payload=payload,
+                message=f'Interface "{source.name}" was added to NetBox.',
+                cache=self._interfaces_by_device[target_device["id"]],
+                cache_record={"name": source.name},
             )
-            return f'Interface "{source.name}" was added to NetBox.'
 
-        await self._write("PATCH", f"dcim/interfaces/{target['id']}/", payload)
-        return f'Interface "{source.name}" was updated in NetBox.'
+        return _PreparedWrite(
+            method="PATCH",
+            collection_path="dcim/interfaces/",
+            item_path=f"dcim/interfaces/{target['id']}/",
+            payload=payload,
+            message=f'Interface "{source.name}" was updated in NetBox.',
+            cache_record={"id": target["id"]},
+        )
 
     async def import_vlan(
         self,
@@ -367,6 +453,19 @@ class NetBoxClient:
         *,
         create: bool = False,
     ) -> str:
+        prepared = await self._prepare_vlan_import(device_name, source, fields, create=create)
+        response = await self._write(prepared.method, prepared.item_path, prepared.payload)
+        prepared.record_success(response)
+        return prepared.message
+
+    async def _prepare_vlan_import(
+        self,
+        device_name: str,
+        source: Vlan,
+        fields: list[str],
+        *,
+        create: bool = False,
+    ) -> _PreparedWrite:
         allowed = {"name", "description"}
         requested = allowed if create else set(fields) & allowed
         if not requested:
@@ -400,12 +499,118 @@ class NetBoxClient:
 
         if create:
             payload["vid"] = source.vid
-            created = await self._write("POST", "ipam/vlans/", payload)
-            vlan_results.append({"id": created.get("id"), **payload})
-            return f"VLAN {source.vid} was added to NetBox."
+            return _PreparedWrite(
+                method="POST",
+                collection_path="ipam/vlans/",
+                item_path="ipam/vlans/",
+                payload=payload,
+                message=f"VLAN {source.vid} was added to NetBox.",
+                cache=vlan_results,
+                cache_record=payload,
+            )
 
-        await self._write("PATCH", f"ipam/vlans/{target['id']}/", payload)
-        return f"VLAN {source.vid} was updated in NetBox."
+        return _PreparedWrite(
+            method="PATCH",
+            collection_path="ipam/vlans/",
+            item_path=f"ipam/vlans/{target['id']}/",
+            payload=payload,
+            message=f"VLAN {source.vid} was updated in NetBox.",
+            cache_record={"id": target["id"]},
+        )
+
+    async def import_many(
+        self, device_name: str, actions: list[NetBoxImportAction]
+    ) -> list[NetBoxImportResult]:
+        """Apply compatible actions with NetBox's bulk write API."""
+        results: list[NetBoxImportResult | None] = [None] * len(actions)
+        prepared_groups: dict[tuple[str, str], list[tuple[int, _PreparedWrite]]] = {}
+
+        for index, action in enumerate(actions):
+            try:
+                if action.resource is ImportResource.INTERFACE:
+                    if action.interface is None:
+                        raise NetBoxError("Interface data is required.")
+                    prepared = await self._prepare_interface_import(
+                        device_name,
+                        action.interface,
+                        action.fields,
+                        create=action.create,
+                    )
+                else:
+                    if action.vlan is None:
+                        raise NetBoxError("VLAN data is required.")
+                    prepared = await self._prepare_vlan_import(
+                        device_name,
+                        action.vlan,
+                        action.fields,
+                        create=action.create,
+                    )
+            except NetBoxError as exc:
+                results[index] = NetBoxImportResult(success=False, message=str(exc))
+                continue
+            prepared_groups.setdefault(
+                (prepared.method, prepared.collection_path), []
+            ).append((index, prepared))
+
+        for group in prepared_groups.values():
+            if len(group) == 1:
+                index, prepared = group[0]
+                results[index] = await self._apply_prepared(prepared)
+                continue
+
+            method = group[0][1].method
+            payloads = []
+            for _index, prepared in group:
+                payload = dict(prepared.payload)
+                if method == "PATCH" and prepared.cache_record is not None:
+                    payload["id"] = prepared.cache_record["id"]
+                payloads.append(payload)
+
+            try:
+                responses = await self._write_bulk(
+                    method, group[0][1].collection_path, payloads
+                )
+                if len(responses) != len(group):
+                    raise NetBoxError("NetBox returned an incomplete bulk update response.")
+                for (index, prepared), response in zip(group, responses, strict=True):
+                    prepared.record_success(response)
+                    results[index] = NetBoxImportResult(
+                        success=True, message=prepared.message
+                    )
+            except _BulkWriteRejected:
+                semaphore = asyncio.Semaphore(8)
+
+                async def apply_one(
+                    index: int, prepared: _PreparedWrite
+                ) -> tuple[int, NetBoxImportResult]:
+                    async with semaphore:
+                        return index, await self._apply_prepared(prepared)
+
+                individual_results = await asyncio.gather(
+                    *(apply_one(index, prepared) for index, prepared in group)
+                )
+                for index, result in individual_results:
+                    results[index] = result
+            except NetBoxError as exc:
+                for index, _prepared in group:
+                    results[index] = NetBoxImportResult(success=False, message=str(exc))
+
+        return [
+            result
+            if result is not None
+            else NetBoxImportResult(success=False, message="The NetBox update was not applied.")
+            for result in results
+        ]
+
+    async def _apply_prepared(self, prepared: _PreparedWrite) -> NetBoxImportResult:
+        try:
+            response = await self._write(
+                prepared.method, prepared.item_path, prepared.payload
+            )
+            prepared.record_success(response)
+            return NetBoxImportResult(success=True, message=prepared.message)
+        except NetBoxError as exc:
+            return NetBoxImportResult(success=False, message=str(exc))
 
     @staticmethod
     def _normalize_interface_name(name: str) -> str:

@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from switchcheck.models import Interface, Vlan
+from switchcheck.models import ImportResource, Interface, NetBoxImportAction, Vlan
 from switchcheck.netbox import NetBoxClient, NetBoxError
 
 
@@ -212,6 +212,101 @@ async def test_reuses_preloaded_data_across_batch_imports() -> None:
     assert device_route.call_count == 1
     assert interface_route.call_count == 1
     assert vlan_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_import_many_uses_netbox_bulk_patch() -> None:
+    respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    respx.get("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "next": None,
+                "results": [
+                    {"id": 8, "name": "1/1/1"},
+                    {"id": 9, "name": "1/1/2"},
+                ],
+            },
+        )
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+    bulk_route = respx.patch("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 8, "name": "1/1/1"},
+                {"id": 9, "name": "1/1/2"},
+            ],
+        )
+    )
+    actions = [
+        NetBoxImportAction(
+            resource=ImportResource.INTERFACE,
+            fields=["description"],
+            interface=Interface(name=f"1/1/{port}", description="Updated"),
+        )
+        for port in (1, 2)
+    ]
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        results = await client.import_many("access-01", actions)
+
+    assert all(result.success for result in results)
+    assert bulk_route.calls[0].request.content == (
+        b'[{"description":"Updated","id":8},{"description":"Updated","id":9}]'
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_import_many_falls_back_when_bulk_writes_are_unsupported() -> None:
+    respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    respx.get("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "next": None,
+                "results": [
+                    {"id": 8, "name": "1/1/1"},
+                    {"id": 9, "name": "1/1/2"},
+                ],
+            },
+        )
+    )
+    respx.get("https://netbox.example/api/ipam/vlans/").mock(
+        return_value=httpx.Response(200, json={"next": None, "results": []})
+    )
+    respx.patch("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(405)
+    )
+    first_route = respx.patch("https://netbox.example/api/dcim/interfaces/8/").mock(
+        return_value=httpx.Response(200, json={"id": 8})
+    )
+    second_route = respx.patch("https://netbox.example/api/dcim/interfaces/9/").mock(
+        return_value=httpx.Response(200, json={"id": 9})
+    )
+    actions = [
+        NetBoxImportAction(
+            resource=ImportResource.INTERFACE,
+            fields=["description"],
+            interface=Interface(name=f"1/1/{port}", description="Updated"),
+        )
+        for port in (1, 2)
+    ]
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        results = await client.import_many("access-01", actions)
+
+    assert all(result.success for result in results)
+    assert first_route.called
+    assert second_route.called
 
 
 @pytest.mark.asyncio

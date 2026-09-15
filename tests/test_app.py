@@ -1,11 +1,15 @@
-import asyncio
-
 import httpx
 import respx
 from fastapi.testclient import TestClient
 
 from switchcheck.app import app
-from switchcheck.models import ConfigurationData, DeviceSummary, Interface
+from switchcheck.models import (
+    ConfigurationData,
+    DeviceSummary,
+    ImportResource,
+    Interface,
+    NetBoxImportResult,
+)
 
 client = TestClient(app)
 
@@ -139,13 +143,18 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
         async def prepare_import(self, _device) -> None:
             pass
 
-        async def import_vlan(self, _device, source, _fields, *, create=False):
-            calls.append(f"vlan:{source.vid}:{create}")
-            return f"VLAN {source.vid} added"
-
-        async def import_interface(self, _device, source, _fields, *, create=False):
-            calls.append(f"interface:{source.name}:{create}")
-            return f"Interface {source.name} added"
+        async def import_many(self, _device, actions):
+            results = []
+            for action in actions:
+                source = (
+                    action.interface
+                    if action.resource is ImportResource.INTERFACE
+                    else action.vlan
+                )
+                identifier = source.name if action.interface else source.vid
+                calls.append(f"{action.resource.value}:{identifier}:{action.create}")
+                results.append(NetBoxImportResult(success=True, message="Applied"))
+            return results
 
     monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
     response = client.post(
@@ -195,9 +204,12 @@ def test_batch_import_applies_interface_mode_before_vlan_assignment(monkeypatch)
         async def prepare_import(self, _device) -> None:
             pass
 
-        async def import_interface(self, _device, _source, fields, *, create=False):
-            calls.append(fields[0])
-            return f"Updated {fields[0]}"
+        async def import_many(self, _device, actions):
+            calls.extend(action.fields[0] for action in actions)
+            return [
+                NetBoxImportResult(success=True, message=f"Updated {action.fields[0]}")
+                for action in actions
+            ]
 
     monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
     response = client.post(
@@ -255,9 +267,8 @@ def test_device_discovery_endpoint(monkeypatch) -> None:
     assert response.json()[0]["name"] == "edge-01"
 
 
-def test_batch_import_runs_independent_actions_concurrently(monkeypatch) -> None:
-    active = 0
-    max_active = 0
+def test_batch_import_accepts_200_actions(monkeypatch) -> None:
+    batch_sizes = []
 
     class FakeNetBoxClient:
         def __init__(self, *_args, **_kwargs) -> None:
@@ -272,13 +283,12 @@ def test_batch_import_runs_independent_actions_concurrently(monkeypatch) -> None
         async def prepare_import(self, _device) -> None:
             pass
 
-        async def import_interface(self, _device, source, _fields, *, create=False):
-            nonlocal active, max_active
-            active += 1
-            max_active = max(max_active, active)
-            await asyncio.sleep(0.01)
-            active -= 1
-            return f"Interface {source.name} updated"
+        async def import_many(self, _device, actions):
+            batch_sizes.append(len(actions))
+            return [
+                NetBoxImportResult(success=True, message="Interface updated")
+                for _action in actions
+            ]
 
     monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
     response = client.post(
@@ -293,14 +303,14 @@ def test_batch_import_runs_independent_actions_concurrently(monkeypatch) -> None
                     "fields": ["description"],
                     "interface": {"name": f"1/1/{port}", "description": "Updated"},
                 }
-                for port in range(1, 4)
+                for port in range(1, 201)
             ],
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["applied"] == 3
-    assert max_active == 3
+    assert response.json()["applied"] == 200
+    assert batch_sizes == [200]
 
 
 def test_change_plan_reports_before_and_after_without_writing(monkeypatch) -> None:
