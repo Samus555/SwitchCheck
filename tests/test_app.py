@@ -18,6 +18,9 @@ def test_home_and_health() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "Aruba configuration" in response.text
+    assert "ArubaOS-Switch (legacy, exit)" in response.text
+    assert "ArubaOS-Switch (legacy, quit)" in response.text
+    assert 'value="tagged_vlans"' in response.text
     assert client.get("/health").json() == {"status": "ok"}
 
 

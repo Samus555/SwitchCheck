@@ -201,6 +201,13 @@ tr:last-child td { border-bottom: 0; }
 .diff-line.current_only .current-code { background: #fff1f2; color: #9f1239; }
 .diff-line.rendered_only .rendered-code { background: #effdf4; color: #166534; }
 .remediation-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+.remediation-controls { display: flex; align-items: end; gap: 24px; margin-bottom: 12px; padding: 14px 16px; }
+.remediation-controls > label { min-width: 230px; }
+.remediation-controls select { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--foreground); background: var(--surface); }
+.remediation-controls fieldset { display: flex; flex: 1; flex-wrap: wrap; gap: 8px 16px; margin: 0; padding: 0; border: 0; }
+.remediation-controls legend { margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
+.remediation-controls fieldset label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; cursor: pointer; }
+.remediation-controls input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); }
 .remediation-code { padding: 18px; overflow: auto; white-space: pre; color: #e5e7eb; background: #171a21; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .progress-dialog {
@@ -266,6 +273,8 @@ footer span { padding: 0 6px; }
   .results-heading-actions { width: 100%; flex-direction: column; }
   .export-actions .button, .results-heading-actions > .button { flex: 1; }
   .remediation-heading { align-items: stretch; flex-direction: column; }
+  .remediation-controls { align-items: stretch; flex-direction: column; }
+  .remediation-controls > label { min-width: 0; }
 }
 
 /* Terminal interface */
@@ -501,6 +510,8 @@ tbody tr:hover > td { background: rgba(140, 200, 245, .018); }
 .diff-line.changed .line-code { color: #ffe49a; background: #1c1808; }
 .diff-line.current_only .current-code { color: #ff829a; background: #1d080e; }
 .diff-line.rendered_only .rendered-code { color: #8dbb98; background: #07150b; }
+.remediation-controls select { border-radius: 0; color: var(--foreground); background: #090d12; }
+.remediation-controls select:focus-visible { outline: 1px solid var(--primary); outline-offset: 3px; }
 
 .progress-dialog {
   border: 1px solid var(--border);

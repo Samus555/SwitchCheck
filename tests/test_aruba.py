@@ -73,6 +73,27 @@ vlan 20
     assert interfaces[1].enabled is False
 
 
+def test_expands_legacy_aruba_lettered_port_ranges() -> None:
+    parsed = parse_aruba_configuration(
+        """
+vlan 10
+   untagged A1-A3
+vlan 20
+   tagged 1/B1-B2
+"""
+    )
+
+    assert [interface.name for interface in parsed.interfaces] == [
+        "1/B1",
+        "1/B2",
+        "A1",
+        "A2",
+        "A3",
+    ]
+    assert parsed.interfaces[0].tagged_vlans == [20]
+    assert parsed.interfaces[2].untagged_vlan == 10
+
+
 def test_parses_vlan_names_descriptions_and_interface_membership() -> None:
     config = """
 vlan 10
