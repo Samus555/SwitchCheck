@@ -247,6 +247,7 @@ async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBat
         results=results,
     )
 
+
 async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImportAction) -> str:
     if action.resource is ImportResource.INTERFACE:
         if action.interface is None:

@@ -308,9 +308,7 @@ class NetBoxClient:
         *,
         create: bool = False,
     ) -> str:
-        prepared = await self._prepare_interface_import(
-            device_name, source, fields, create=create
-        )
+        prepared = await self._prepare_interface_import(device_name, source, fields, create=create)
         response = await self._write(prepared.method, prepared.item_path, prepared.payload)
         prepared.record_success(response)
         return prepared.message
@@ -548,9 +546,9 @@ class NetBoxClient:
             except NetBoxError as exc:
                 results[index] = NetBoxImportResult(success=False, message=str(exc))
                 continue
-            prepared_groups.setdefault(
-                (prepared.method, prepared.collection_path), []
-            ).append((index, prepared))
+            prepared_groups.setdefault((prepared.method, prepared.collection_path), []).append(
+                (index, prepared)
+            )
 
         for group in prepared_groups.values():
             if len(group) == 1:
@@ -567,23 +565,21 @@ class NetBoxClient:
                 payloads.append(payload)
 
             try:
-                responses = await self._write_bulk(
-                    method, group[0][1].collection_path, payloads
-                )
+                responses = await self._write_bulk(method, group[0][1].collection_path, payloads)
                 if len(responses) != len(group):
                     raise NetBoxError("NetBox returned an incomplete bulk update response.")
                 for (index, prepared), response in zip(group, responses, strict=True):
                     prepared.record_success(response)
-                    results[index] = NetBoxImportResult(
-                        success=True, message=prepared.message
-                    )
+                    results[index] = NetBoxImportResult(success=True, message=prepared.message)
             except _BulkWriteRejected:
                 semaphore = asyncio.Semaphore(8)
 
                 async def apply_one(
-                    index: int, prepared: _PreparedWrite
+                    index: int,
+                    prepared: _PreparedWrite,
+                    concurrency_limit: asyncio.Semaphore = semaphore,
                 ) -> tuple[int, NetBoxImportResult]:
-                    async with semaphore:
+                    async with concurrency_limit:
                         return index, await self._apply_prepared(prepared)
 
                 individual_results = await asyncio.gather(
@@ -604,9 +600,7 @@ class NetBoxClient:
 
     async def _apply_prepared(self, prepared: _PreparedWrite) -> NetBoxImportResult:
         try:
-            response = await self._write(
-                prepared.method, prepared.item_path, prepared.payload
-            )
+            response = await self._write(prepared.method, prepared.item_path, prepared.payload)
             prepared.record_success(response)
             return NetBoxImportResult(success=True, message=prepared.message)
         except NetBoxError as exc:

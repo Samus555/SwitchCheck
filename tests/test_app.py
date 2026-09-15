@@ -147,9 +147,7 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
             results = []
             for action in actions:
                 source = (
-                    action.interface
-                    if action.resource is ImportResource.INTERFACE
-                    else action.vlan
+                    action.interface if action.resource is ImportResource.INTERFACE else action.vlan
                 )
                 identifier = source.name if action.interface else source.vid
                 calls.append(f"{action.resource.value}:{identifier}:{action.create}")
@@ -286,8 +284,7 @@ def test_batch_import_accepts_200_actions(monkeypatch) -> None:
         async def import_many(self, _device, actions):
             batch_sizes.append(len(actions))
             return [
-                NetBoxImportResult(success=True, message="Interface updated")
-                for _action in actions
+                NetBoxImportResult(success=True, message="Interface updated") for _action in actions
             ]
 
     monkeypatch.setattr("switchcheck.app.NetBoxClient", FakeNetBoxClient)
