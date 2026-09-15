@@ -59,7 +59,9 @@ class NetBoxClient:
         self._devices_by_name: dict[str, dict[str, Any]] = {}
         self._device_groups: dict[int, list[dict[str, Any]]] = {}
         self._interfaces_by_device: dict[int, list[dict[str, Any]]] = {}
-        self._vlans: list[dict[str, Any]] | None = None
+        self._vlans: list[dict[str, Any]] = []
+        self._loaded_vlan_ids: set[int] = set()
+        self._all_vlans_loaded = False
 
     async def __aenter__(self) -> "NetBoxClient":
         return self
@@ -247,15 +249,37 @@ class NetBoxClient:
         ]
 
     async def _get_vlan_records(self) -> list[dict[str, Any]]:
-        if self._vlans is None:
-            self._vlans = await self._get_paginated("ipam/vlans/", {"limit": 100})
+        if not self._all_vlans_loaded:
+            self._vlans[:] = await self._get_paginated("ipam/vlans/", {"limit": 100})
+            self._loaded_vlan_ids = {int(item["vid"]) for item in self._vlans}
+            self._all_vlans_loaded = True
         return self._vlans
 
-    async def prepare_import(self, device_name: str) -> None:
+    async def _get_vlan_records_for_vids(self, vlan_ids: set[int]) -> list[dict[str, Any]]:
+        if not vlan_ids:
+            return []
+        if not self._all_vlans_loaded:
+            missing_ids = vlan_ids - self._loaded_vlan_ids
+            semaphore = asyncio.Semaphore(8)
+
+            async def fetch(vid: int) -> list[dict[str, Any]]:
+                async with semaphore:
+                    return await self._get_paginated("ipam/vlans/", {"vid": vid, "limit": 100})
+
+            fetched = await asyncio.gather(*(fetch(vid) for vid in sorted(missing_ids)))
+            for vid, records in zip(sorted(missing_ids), fetched, strict=True):
+                self._vlans.extend(records)
+                self._loaded_vlan_ids.add(vid)
+        return [item for item in self._vlans if int(item["vid"]) in vlan_ids]
+
+    async def prepare_import(self, device_name: str, vlan_ids: set[int] | None = None) -> None:
         """Preload shared NetBox data once before executing a batch."""
         device = await self._find_device(device_name)
         devices = await self._get_device_group(device)
-        await asyncio.gather(self._get_interface_records(devices), self._get_vlan_records())
+        await asyncio.gather(
+            self._get_interface_records(devices),
+            self._get_vlan_records_for_vids(vlan_ids or set()),
+        )
 
     async def get_configuration(
         self, device_name: str, aruba_vlan_ids: set[int] | None = None
@@ -357,10 +381,10 @@ class NetBoxClient:
         if not create and target is None:
             raise NetBoxError(f'Interface "{source.name}" was not found in NetBox.')
 
-        vlan_results = await self._get_vlan_records()
         source_vids = set(source.tagged_vlans)
         if source.untagged_vlan is not None:
             source_vids.add(source.untagged_vlan)
+        vlan_results = await self._get_vlan_records_for_vids(source_vids)
         site_id = (device.get("site") or {}).get("id")
         location_id = (device.get("location") or {}).get("id")
         applicable_vlans = [
@@ -472,7 +496,7 @@ class NetBoxClient:
         device = await self._find_device(device_name)
         site_id = (device.get("site") or {}).get("id")
         location_id = (device.get("location") or {}).get("id")
-        vlan_results = await self._get_vlan_records()
+        vlan_results = await self._get_vlan_records_for_vids({source.vid})
         candidates = [
             item
             for item in vlan_results
@@ -503,7 +527,7 @@ class NetBoxClient:
                 item_path="ipam/vlans/",
                 payload=payload,
                 message=f"VLAN {source.vid} was added to NetBox.",
-                cache=vlan_results,
+                cache=self._vlans,
                 cache_record=payload,
             )
 

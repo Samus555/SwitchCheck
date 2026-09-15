@@ -228,11 +228,12 @@ async def import_to_netbox(payload: NetBoxImportRequest) -> dict[str, str]:
 async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBatchImportResult:
     results: list[NetBoxImportResult] = []
     actions = sorted(payload.actions, key=_import_priority)
+    vlan_ids = _referenced_vlan_ids(actions)
     async with NetBoxClient(
         str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
     ) as client:
         try:
-            await client.prepare_import(payload.device)
+            await client.prepare_import(payload.device, vlan_ids)
         except NetBoxError as exc:
             results = [NetBoxImportResult(success=False, message=str(exc)) for _action in actions]
         else:
@@ -266,6 +267,18 @@ async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImpor
         action.fields,
         create=action.create,
     )
+
+
+def _referenced_vlan_ids(actions: list[NetBoxImportAction]) -> set[int]:
+    vlan_ids: set[int] = set()
+    for action in actions:
+        if action.vlan is not None:
+            vlan_ids.add(action.vlan.vid)
+        if action.interface is not None:
+            vlan_ids.update(action.interface.tagged_vlans)
+            if action.interface.untagged_vlan is not None:
+                vlan_ids.add(action.interface.untagged_vlan)
+    return vlan_ids
 
 
 def _import_priority(action: NetBoxImportAction) -> int:

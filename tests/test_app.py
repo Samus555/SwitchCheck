@@ -140,7 +140,7 @@ def test_batch_import_orders_dependencies(monkeypatch) -> None:
         async def __aexit__(self, *_args) -> None:
             pass
 
-        async def prepare_import(self, _device) -> None:
+        async def prepare_import(self, _device, _vlan_ids) -> None:
             pass
 
         async def import_many(self, _device, actions):
@@ -199,7 +199,7 @@ def test_batch_import_applies_interface_mode_before_vlan_assignment(monkeypatch)
         async def __aexit__(self, *_args) -> None:
             pass
 
-        async def prepare_import(self, _device) -> None:
+        async def prepare_import(self, _device, _vlan_ids) -> None:
             pass
 
         async def import_many(self, _device, actions):
@@ -267,6 +267,7 @@ def test_device_discovery_endpoint(monkeypatch) -> None:
 
 def test_batch_import_accepts_200_actions(monkeypatch) -> None:
     batch_sizes = []
+    preloaded_vlan_ids = []
 
     class FakeNetBoxClient:
         def __init__(self, *_args, **_kwargs) -> None:
@@ -278,8 +279,8 @@ def test_batch_import_accepts_200_actions(monkeypatch) -> None:
         async def __aexit__(self, *_args) -> None:
             pass
 
-        async def prepare_import(self, _device) -> None:
-            pass
+        async def prepare_import(self, _device, vlan_ids) -> None:
+            preloaded_vlan_ids.append(vlan_ids)
 
         async def import_many(self, _device, actions):
             batch_sizes.append(len(actions))
@@ -308,6 +309,7 @@ def test_batch_import_accepts_200_actions(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["applied"] == 200
     assert batch_sizes == [200]
+    assert preloaded_vlan_ids == [set()]
 
 
 def test_change_plan_reports_before_and_after_without_writing(monkeypatch) -> None:

@@ -174,7 +174,7 @@ async def test_imports_selected_interface_field() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_reuses_preloaded_data_across_batch_imports() -> None:
+async def test_skips_vlan_inventory_for_non_vlan_batch_imports() -> None:
     device_route = respx.get("https://netbox.example/api/dcim/devices/").mock(
         return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
     )
@@ -211,7 +211,48 @@ async def test_reuses_preloaded_data_across_batch_imports() -> None:
 
     assert device_route.call_count == 1
     assert interface_route.call_count == 1
-    assert vlan_route.call_count == 1
+    assert vlan_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_preloads_only_referenced_vlans_for_imports() -> None:
+    respx.get("https://netbox.example/api/dcim/devices/").mock(
+        return_value=httpx.Response(200, json={"results": [{"id": 7, "name": "access-01"}]})
+    )
+    respx.get("https://netbox.example/api/dcim/interfaces/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"next": None, "results": [{"id": 8, "name": "1/1/1"}]},
+        )
+    )
+
+    def vlan_response(request: httpx.Request) -> httpx.Response:
+        vid = int(request.url.params["vid"])
+        return httpx.Response(
+            200,
+            json={"next": None, "results": [{"id": vid + 100, "vid": vid}]},
+        )
+
+    vlan_route = respx.get("https://netbox.example/api/ipam/vlans/").mock(side_effect=vlan_response)
+    patch_route = respx.patch("https://netbox.example/api/dcim/interfaces/8/").mock(
+        return_value=httpx.Response(200, json={"id": 8})
+    )
+
+    async with NetBoxClient("https://netbox.example", "secret") as client:
+        await client.prepare_import("access-01", {10, 20})
+        await client.import_interface(
+            "access-01",
+            Interface(name="1/1/1", untagged_vlan=10),
+            ["untagged_vlan"],
+        )
+
+    assert vlan_route.call_count == 2
+    assert {
+        (call.request.url.params["vid"], call.request.url.params["limit"])
+        for call in vlan_route.calls
+    } == {("10", "100"), ("20", "100")}
+    assert patch_route.calls[0].request.content == b'{"untagged_vlan":110}'
 
 
 @pytest.mark.asyncio
