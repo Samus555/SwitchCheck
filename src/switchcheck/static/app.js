@@ -589,6 +589,8 @@ function renderConfigDiff() {
 
 function renderRemediation() {
   const platform = remediationPlatform.value;
+  const commandPlatform =
+    platform === "arubaos_switch_quit" ? "arubaos_switch" : platform;
   const selectedCategories = new Set(
     [...remediationFilters.querySelectorAll('input[type="checkbox"]:checked')]
       .map((input) => input.value),
@@ -599,17 +601,22 @@ function renderRemediation() {
       const resourceFilter = block.resource === "vlan" ? "vlans" : "interfaces";
       return selectedCategories.has(resourceFilter) && selectedCategories.has(block.category);
     })
-    .map((block) => block[platform] || [])
+    .map((block) => {
+      const commands = block[commandPlatform] || [];
+      return platform === "arubaos_switch_quit"
+        ? commands.map((command) => command === "exit" ? "quit" : command)
+        : commands;
+    })
     .filter((commands) => commands.length);
   const commands = commandGroups.flatMap((group, index) =>
     index < commandGroups.length - 1 ? [...group, ""] : group,
   );
 
-  if (!blocks.length && platform === "aruba_cx") {
+  if (!blocks.length && commandPlatform === "aruba_cx") {
     commands.push(...(comparisonData.remediation_commands || []));
   }
   document.querySelector("#remediation-title").textContent =
-    `NetBox intent as ${platform === "aruba_cx" ? "Aruba CX" : "ArubaOS-Switch"} CLI`;
+    `NetBox intent as ${commandPlatform === "aruba_cx" ? "Aruba CX" : "ArubaOS-Switch"} CLI`;
   remediationCommands.textContent =
     commands.join("\n") || "No remediation commands match the selected filters.";
 }

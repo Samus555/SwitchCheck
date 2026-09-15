@@ -82,7 +82,8 @@ vlan 20
 ```
 
 The Remediation tab can limit generated commands to VLANs, interfaces, names, descriptions,
-untagged VLANs, tagged VLANs, or LAGs before copying them.
+untagged VLANs, tagged VLANs, or LAGs before copying them. Legacy output can terminate
+configuration contexts with either `exit` or `quit`.
 
 ## Development
 
