@@ -61,9 +61,7 @@ def _expand_interfaces(value: str) -> list[str]:
                 or left_prefix.endswith(right_prefix)
                 or right_prefix.endswith(left_prefix)
             ):
-                result.extend(
-                    f"{left_prefix}{port}" for port in range(int(start), int(end) + 1)
-                )
+                result.extend(f"{left_prefix}{port}" for port in range(int(start), int(end) + 1))
                 continue
         if part:
             result.append(part)

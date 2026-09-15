@@ -305,16 +305,12 @@ def generate_aruba_remediation(
         changed = _changed_fields(item)
         all_fields = item.status is CompareStatus.ONLY_NETBOX
 
-        interface_commands = [
-            "    no shutdown" if target.enabled else "    shutdown"
-        ]
+        interface_commands = ["    no shutdown" if target.enabled else "    shutdown"]
         legacy_interface_commands = ["    enable" if target.enabled else "    disable"]
-        if all_fields or "mtu" in changed:
-            if target.mtu is not None:
-                interface_commands.append(f"    mtu {target.mtu}")
-        if all_fields or "speed" in changed:
-            if target.speed is not None:
-                interface_commands.append(f"    speed {target.speed}")
+        if (all_fields or "mtu" in changed) and target.mtu is not None:
+            interface_commands.append(f"    mtu {target.mtu}")
+        if (all_fields or "speed" in changed) and target.speed is not None:
+            interface_commands.append(f"    speed {target.speed}")
         if all_fields or {"enabled", "mtu", "speed"} & changed:
             blocks.append(
                 _interface_block(
@@ -369,9 +365,7 @@ def generate_aruba_remediation(
                 )
             )
         if item.status is CompareStatus.ONLY_NETBOX or "name" in changed:
-            name_command = (
-                f"    name {_cli_value(target.name)}" if target.name else "    no name"
-            )
+            name_command = f"    name {_cli_value(target.name)}" if target.name else "    no name"
             legacy_name_command = (
                 f'    name "{_aos_cli_value(target.name)}"' if target.name else "    no name"
             )
@@ -389,9 +383,7 @@ def generate_aruba_remediation(
                 if target.description
                 else "    no description"
             )
-            blocks.append(
-                _vlan_block("descriptions", target.vid, [description_command], [])
-            )
+            blocks.append(_vlan_block("descriptions", target.vid, [description_command], []))
     return blocks
 
 
@@ -425,9 +417,7 @@ def _vlan_block(
         category=category,
         identifier=str(vid),
         aruba_cx=[f"vlan {vid}", *cx_commands, "exit"] if cx_commands else [],
-        arubaos_switch=(
-            [f"vlan {vid}", *arubaos_commands, "exit"] if arubaos_commands else []
-        ),
+        arubaos_switch=([f"vlan {vid}", *arubaos_commands, "exit"] if arubaos_commands else []),
     )
 
 
@@ -463,9 +453,7 @@ def _untagged_vlan_block(target: Interface, current: Interface | None) -> Remedi
     return RemediationBlock(
         category="untagged_vlans",
         identifier=target.name,
-        aruba_cx=(
-            [f"interface {target.name}", *cx_commands, "exit"] if cx_commands else []
-        ),
+        aruba_cx=([f"interface {target.name}", *cx_commands, "exit"] if cx_commands else []),
         arubaos_switch=legacy_commands,
     )
 

@@ -20,7 +20,7 @@ interface intent stored in NetBox. It has no database, user accounts, or server-
 - Highlights matches, configuration drift, and interfaces missing on either side
 - Compares MTU, speed, duplex, type, MAC address, management state, and custom fields when present
 - Ignores comments, blank lines, case, and cosmetic whitespace in rendered configuration diffs
-- Generates Aruba CX remediation commands from NetBox intent
+- Generates filtered Aruba CX or legacy ArubaOS-Switch remediation commands from NetBox intent
 - Exports comparison reports as JSON, CSV, or standalone HTML
 - Remembers non-secret browser preferences such as URL, device, and TLS settings
 - Keeps the configuration and API token in memory only for the duration of a request
@@ -80,6 +80,9 @@ vlan 10
 vlan 20
     tagged 1-4
 ```
+
+The Remediation tab can limit generated commands to VLANs, interfaces, names, descriptions,
+untagged VLANs, tagged VLANs, or LAGs before copying them.
 
 ## Development
 
