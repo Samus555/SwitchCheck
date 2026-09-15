@@ -595,7 +595,10 @@ function renderRemediation() {
   );
   const blocks = comparisonData.remediation || [];
   const commandGroups = blocks
-    .filter((block) => selectedCategories.has(block.category))
+    .filter((block) => {
+      const resourceFilter = block.resource === "vlan" ? "vlans" : "interfaces";
+      return selectedCategories.has(resourceFilter) && selectedCategories.has(block.category);
+    })
     .map((block) => block[platform] || [])
     .filter((commands) => commands.length);
   const commands = commandGroups.flatMap((group, index) =>

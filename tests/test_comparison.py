@@ -154,6 +154,7 @@ def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
     )
 
     blocks = result.remediation
+    assert all(block.resource == "interface" for block in blocks[:5])
     assert {
         "interfaces",
         "descriptions",
@@ -191,3 +192,8 @@ def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
     lag = next(block for block in blocks if block.category == "lags")
     assert lag.aruba_cx == ["interface A1", "    lag 1", "exit"]
     assert lag.arubaos_switch == ["trunk A1 Trk1 lacp"]
+    assert all(
+        block.resource == "vlan"
+        for block in blocks
+        if block.category in {"vlans", "names"} and block.identifier in {"10", "30"}
+    )

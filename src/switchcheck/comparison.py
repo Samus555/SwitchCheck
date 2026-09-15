@@ -358,6 +358,7 @@ def generate_aruba_remediation(
         if item.status is CompareStatus.ONLY_NETBOX:
             blocks.append(
                 RemediationBlock(
+                    resource="vlan",
                     category="vlans",
                     identifier=str(target.vid),
                     aruba_cx=[f"vlan {target.vid}", "exit"],
@@ -398,6 +399,7 @@ def _interface_block(
     arubaos_commands: list[str],
 ) -> RemediationBlock:
     return RemediationBlock(
+        resource="interface",
         category=category,
         identifier=name,
         aruba_cx=[f"interface {name}", *cx_commands, "exit"] if cx_commands else [],
@@ -414,6 +416,7 @@ def _vlan_block(
     arubaos_commands: list[str],
 ) -> RemediationBlock:
     return RemediationBlock(
+        resource="vlan",
         category=category,
         identifier=str(vid),
         aruba_cx=[f"vlan {vid}", *cx_commands, "exit"] if cx_commands else [],
@@ -451,6 +454,7 @@ def _untagged_vlan_block(target: Interface, current: Interface | None) -> Remedi
             ]
         )
     return RemediationBlock(
+        resource="interface",
         category="untagged_vlans",
         identifier=target.name,
         aruba_cx=([f"interface {target.name}", *cx_commands, "exit"] if cx_commands else []),
@@ -472,6 +476,7 @@ def _tagged_vlan_block(target: Interface, current: Interface | None) -> Remediat
     for vid in sorted(target_vlans - current_vlans):
         legacy_commands.extend([f"vlan {vid}", f"    tagged {target.name}", "exit"])
     return RemediationBlock(
+        resource="interface",
         category="tagged_vlans",
         identifier=target.name,
         aruba_cx=[f"interface {target.name}", cx_command, "exit"],
@@ -489,6 +494,7 @@ def _lag_block(target: Interface) -> RemediationBlock:
         cx_commands = [f"interface {target.name}", "    no lag", "exit"]
         legacy_commands = [f"no trunk {target.name}"]
     return RemediationBlock(
+        resource="interface",
         category="lags",
         identifier=target.name,
         aruba_cx=cx_commands,

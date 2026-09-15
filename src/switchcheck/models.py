@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -99,6 +100,7 @@ class ComparisonSummary(BaseModel):
 
 
 class RemediationBlock(BaseModel):
+    resource: Literal["interface", "vlan"]
     category: str
     identifier: str
     aruba_cx: list[str] = Field(default_factory=list)
