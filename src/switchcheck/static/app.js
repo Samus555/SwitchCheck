@@ -366,30 +366,29 @@ async function applySelectedChanges() {
   applySelectedButton.textContent = "Applying…";
   actionMessage.hidden = true;
   openApplyProgress(actions.length);
-  const results = [];
+  let results = [];
   try {
-    for (const [index, action] of actions.entries()) {
-      const identifier = action.resource === "interface" ? action.interface.name : action.vlan.vid;
-      applyProgressCurrent.textContent =
-        `Applying ${action.resource} ${identifier} (${index + 1} of ${actions.length})…`;
-      const response = await fetch("/api/netbox/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...connectionPayload(),
-          device: document.querySelector("#device").value,
-          ...action,
-        }),
-      });
-      const data = await response.json();
-      results.push({
-        success: response.ok,
-        message: response.ok ? data.message : data.detail || `Updating ${action.resource} ${identifier} failed.`,
-      });
-      updateApplyProgress(index + 1, actions.length);
+    applyProgressCurrent.textContent = `Applying ${actions.length} changes in parallel…`;
+    const response = await fetch("/api/netbox/import-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...connectionPayload(),
+        device: document.querySelector("#device").value,
+        actions,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const detail = Array.isArray(data.detail)
+        ? data.detail.map((item) => item.msg).join("; ")
+        : data.detail;
+      throw new Error(detail || "The NetBox batch update failed.");
     }
+    results = data.results;
+    updateApplyProgress(results.length, actions.length);
     const failures = results.filter((result) => !result.success);
-    const applied = results.length - failures.length;
+    const applied = data.applied;
     actionMessage.textContent = failures.length
       ? `${applied} applied, ${failures.length} failed: ${failures.map((item) => item.message).join("; ")}`
       : `${applied} selected changes were applied to NetBox.`;

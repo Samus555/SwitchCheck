@@ -228,25 +228,18 @@ async def import_to_netbox(payload: NetBoxImportRequest) -> dict[str, str]:
 async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBatchImportResult:
     results: list[NetBoxImportResult] = []
     actions = sorted(payload.actions, key=_import_priority)
+    vlan_ids = _referenced_vlan_ids(actions)
     async with NetBoxClient(
         str(payload.netbox_url), payload.token, verify_tls=payload.verify_tls
     ) as client:
         try:
-            await client.prepare_import(payload.device)
+            await client.prepare_import(payload.device, vlan_ids)
         except NetBoxError as exc:
             results = [NetBoxImportResult(success=False, message=str(exc)) for _action in actions]
         else:
-            semaphore = asyncio.Semaphore(8)
             for priority in sorted({_import_priority(action) for action in actions}):
                 group = [action for action in actions if _import_priority(action) == priority]
-                results.extend(
-                    await asyncio.gather(
-                        *(
-                            _execute_import_safely(client, payload.device, action, semaphore)
-                            for action in group
-                        )
-                    )
-                )
+                results.extend(await client.import_many(payload.device, group))
 
     applied = sum(result.success for result in results)
     return NetBoxBatchImportResult(
@@ -254,20 +247,6 @@ async def import_batch_to_netbox(payload: NetBoxBatchImportRequest) -> NetBoxBat
         failed=len(results) - applied,
         results=results,
     )
-
-
-async def _execute_import_safely(
-    client: NetBoxClient,
-    device: str,
-    action: NetBoxImportAction,
-    semaphore: asyncio.Semaphore,
-) -> NetBoxImportResult:
-    async with semaphore:
-        try:
-            message = await _execute_import(client, device, action)
-            return NetBoxImportResult(success=True, message=message)
-        except NetBoxError as exc:
-            return NetBoxImportResult(success=False, message=str(exc))
 
 
 async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImportAction) -> str:
@@ -288,6 +267,18 @@ async def _execute_import(client: NetBoxClient, device: str, action: NetBoxImpor
         action.fields,
         create=action.create,
     )
+
+
+def _referenced_vlan_ids(actions: list[NetBoxImportAction]) -> set[int]:
+    vlan_ids: set[int] = set()
+    for action in actions:
+        if action.vlan is not None:
+            vlan_ids.add(action.vlan.vid)
+        if action.interface is not None:
+            vlan_ids.update(action.interface.tagged_vlans)
+            if action.interface.untagged_vlan is not None:
+                vlan_ids.add(action.interface.untagged_vlan)
+    return vlan_ids
 
 
 def _import_priority(action: NetBoxImportAction) -> int:
