@@ -150,7 +150,10 @@ def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
             )
         ],
         [Vlan(vid=10, name="Old")],
-        [Vlan(vid=10, name="Users"), Vlan(vid=30, name="Native")],
+        [
+            Vlan(vid=10, name="Users", description="Employee access"),
+            Vlan(vid=30, name="Native"),
+        ],
     )
 
     blocks = result.remediation
@@ -192,6 +195,25 @@ def test_generates_categorized_cx_and_legacy_aruba_remediation() -> None:
     lag = next(block for block in blocks if block.category == "lags")
     assert lag.aruba_cx == ["interface A1", "    lag 1", "exit"]
     assert lag.arubaos_switch == ["trunk A1 Trk1 lacp"]
+    interface_description = next(
+        block
+        for block in blocks
+        if block.resource == "interface" and block.category == "descriptions"
+    )
+    assert '    description "New uplink"' in interface_description.aruba_cx
+    vlan_description = next(
+        block
+        for block in blocks
+        if block.resource == "vlan"
+        and block.category == "descriptions"
+        and block.identifier == "10"
+    )
+    assert vlan_description.aruba_cx == [
+        "vlan 10",
+        '    description "Employee access"',
+        "exit",
+    ]
+    assert '    description "New uplink"' in result.remediation_commands
     assert all(
         block.resource == "vlan"
         for block in blocks

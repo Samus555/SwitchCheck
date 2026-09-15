@@ -258,7 +258,7 @@ def generate_aruba_commands(
         commands.append(f"interface {target.name}")
         commands.append("    no shutdown" if target.enabled else "    shutdown")
         commands.append(
-            f"    description {_cli_value(target.description)}"
+            f"    description {_description_cli_value(target.description)}"
             if target.description
             else "    no description"
         )
@@ -287,7 +287,7 @@ def generate_aruba_commands(
         if target.name:
             commands.append(f"    name {_cli_value(target.name)}")
         if target.description:
-            commands.append(f"    description {_cli_value(target.description)}")
+            commands.append(f"    description {_description_cli_value(target.description)}")
         commands.append("exit")
     return commands
 
@@ -323,7 +323,7 @@ def generate_aruba_remediation(
 
         if all_fields or "description" in changed:
             cx_description = (
-                f"    description {_cli_value(target.description)}"
+                f"    description {_description_cli_value(target.description)}"
                 if target.description
                 else "    no description"
             )
@@ -380,7 +380,7 @@ def generate_aruba_remediation(
             )
         if item.status is CompareStatus.ONLY_NETBOX or "description" in changed:
             description_command = (
-                f"    description {_cli_value(target.description)}"
+                f"    description {_description_cli_value(target.description)}"
                 if target.description
                 else "    no description"
             )
@@ -504,6 +504,14 @@ def _lag_block(target: Interface) -> RemediationBlock:
 
 def _cli_value(value: str) -> str:
     return re.sub(r"[\r\n]+", " ", value).strip()
+
+
+def _description_cli_value(value: str) -> str:
+    cleaned = _cli_value(value)
+    if re.search(r"\s", cleaned):
+        escaped = cleaned.replace('"', '\\"')
+        return f'"{escaped}"'
+    return cleaned
 
 
 def _aos_cli_value(value: str) -> str:
